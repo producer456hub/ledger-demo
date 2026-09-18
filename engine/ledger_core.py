@@ -71,6 +71,11 @@ _PROCESSOR = re.compile(r"^(SQ|TST|PAYPAL|PP|SP|APLPAY)\s*\*\s*")     # the merc
 _STORE_NO = re.compile(r"(#\s*\d+|\b\d{3,}[A-Z]*\b)")                 # "#1482", "0987", "0194SAN"
 _STREET = re.compile(r"\s+\d{1,6}\s+[A-Z].*$")                         # " 925 LONG HILL ROAD ..." to the end
 _PUNCT = re.compile(r"[^A-Z0-9& ]+")
+# One merchant, several billing names. Amazon bills an order as AMAZON MKTPL*, AMZN MKTP US*, AMAZON MARK*, AMAZON RETA*
+# or AMAZON.COM* and refunds it as AMAZON MKTPLACE PMTS: five merchants on the page, and returns that matched no purchase.
+# Prime is a subscription with a series of its own and stays itself.
+_FAMILIES = ((re.compile(r"^(?:AMAZON|AMZN)(?!\s+PRIME)(?:\s+(?:MKTP\w*|MARK\w*|RETA\w*|COM|US)\b.*)?$"), "AMAZON"),)
+FAMILY_NAME = {"AMAZON": "Amazon"}          # what to call the family: its rows each carry one of the billing names
 
 
 def merchant_key(name, aliases=None):
@@ -86,9 +91,17 @@ def merchant_key(name, aliases=None):
     s = _STREET.sub("", " " + s).strip()   # Apple's Merchant field sometimes drags the street address along
     s = _PUNCT.sub(" ", s)
     s = " ".join(s.split()) or "UNKNOWN"
+    for rx, family in _FAMILIES:
+        if rx.match(s):
+            s = family
     if aliases:
         s = aliases.get(s, s)
     return s
+
+
+def display_name(row):
+    """What to call a row's merchant on the page and on the Watch."""
+    return FAMILY_NAME.get(row["_m"]) or row.get("merchant") or row["_m"]
 
 
 # Apple runs a long town into the ZIP ("NEW SPRINGFIELD12345 XX USA") and a ZIP+4 into the state ("12345-6789XX USA");
@@ -586,13 +599,13 @@ def merchants(rows, since, until):
             ms[r["_m"]]["returned"] -= r["amount"]
         if r["_k"] != "purchase":
             continue
-        m = ms.setdefault(r["_m"], {"merchant": r["_m"], "display": r.get("merchant") or r["_m"], "category": r["_cat"],
+        m = ms.setdefault(r["_m"], {"merchant": r["_m"], "display": display_name(r), "category": r["_cat"],
                                      "spent": 0.0, "bought": 0.0, "returned": 0.0, "visits": 0, "last": r["date"]})
         m["spent"] += r["amount"]
         m["bought"] += r["amount"]
         m["visits"] += 1
         m["last"] = max(m["last"], r["date"])
-        m["display"] = r.get("merchant") or m["display"]
+        m["display"] = display_name(r)
     out = []
     for m in ms.values():
         m["average"] = round(m.pop("bought") / m["visits"], 2)

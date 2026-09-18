@@ -195,7 +195,15 @@ class Data(object):
                 "coverage": {"purchases": n, "channels": chan, "placed": len(placed), "timed": len(timed),
                              "timed_from": min([t["date"] for t in timed] or [None]),
                              "timed_by": dict((k, sum(1 for t in timed if t["time_source"] == k)) for k in set(t["time_source"] for t in timed))},
-                "hour_weekday": motive.hour_weekday(timed), "places": motive.places(placed)[:80]}
+                "hour_weekday": motive.hour_weekday(timed), "places": [self._slim(p) for p in motive.places(placed)]}
+
+    @staticmethod
+    def _slim(p):
+        """The page says "first - last" for a place with many days, so that is all it needs: the top 80 used to be the
+        whole list because one habit's hundreds of dates made every place expensive, and the rest never showed."""
+        if len(p["dates"]) > 3:
+            p = dict(p, dates=[p["dates"][0], p["dates"][-1]], days=len(p["dates"]))
+        return p
 
     def staleness(self):
         last_import = None
@@ -241,9 +249,10 @@ def _make_checkin(conn, tid, epoch, here):
     D = data(conn)
     when = datetime.fromtimestamp(epoch)
     purchases = [r for r in D.rows if r["_k"] == "purchase"]
-    geo = dict((r["mkey"], (r["lat"], r["lon"])) for r in conn.execute("SELECT mkey, lat, lon FROM merchant_geo WHERE lat IS NOT NULL"))
-    approx = set(r["mkey"] for r in conn.execute("SELECT mkey FROM merchant_geo WHERE source = 'city-area'"))
-    g = motive.guess_purchase(purchases, [{"ts": t["ts"], "mkey": t["mkey"]} for t in D.timed], set(h["merchant"] for h in D.habits), when, here, geo, approx)
+    geo = {}                 # a pin per BRANCH: a chain is wherever any of its branches is
+    for r in conn.execute("SELECT mkey, lat, lon, source FROM merchant_geo WHERE lat IS NOT NULL"):
+        geo.setdefault(r["mkey"], []).append((r["lat"], r["lon"], r["source"] == "city-area"))
+    g = motive.guess_purchase(purchases, [{"ts": t["ts"], "mkey": t["mkey"]} for t in D.timed], set(h["merchant"] for h in D.habits), when, here, geo)
     call, state, text, why = {}, "skipped", None, "nothing to go on"
     if g:
         call = motive.infer_intent({"category": g["category"], "amount": g["typical"], "typical": g["typical"], "channel": "in_person",

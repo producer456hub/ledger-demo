@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer"><!-- the street tiles are the page's one outside fetch; they get no Referer, so the tailnet host stays home -->
 <title>Ledger demo</title>
+<link rel="icon" href="data:,">
 <style>
 /* LEDGER surface. Chrome wears the fleet's shared-ui roles (--ui-*, injected by
    deck-shell/shared-ui/build.py); only the chart series colours are local, and
@@ -1054,7 +1055,7 @@ $("#prioToggle").addEventListener("click", (e) => {
 function trendModel() {
   const t = D.trend, top = t.series.slice(0, 5), rest = t.series.slice(5);
   const series = top.map((x, i) => ({ name: x.category, color: SERIES[i], values: x.values.map((v) => Math.max(0, v)) }));
-  if (rest.length) series.push({ name: "Other", color: "--other", values: t.months.map((_, i) => Math.max(0, rest.reduce((a, x) => a + x.values[i], 0))) });
+  if (rest.length) series.push({ name: "Everything else", color: "--other", values: t.months.map((_, i) => Math.max(0, rest.reduce((a, x) => a + x.values[i], 0))) });
   return { months: t.months, series, totals: t.months.map((_, i) => series.reduce((a, x) => a + x.values[i], 0)) };
 }
 function renderTrend() {
@@ -1402,7 +1403,7 @@ function renderWhere() {
   svg.append(s("line", { x1: 14, x2: 14 + barKm * sc, y1: H - 14, y2: H - 14, stroke: "var(--ui-secondary)", "stroke-width": 2 }), s("text", { x: 14, y: H - 20 }, barKm + " km"), s("text", { x: W - 14, y: 18, "text-anchor": "end" }, "north ↑"));
   put($("#whereMap"), svg);
   put($("#whereTable"), h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Place" }), h("th", { text: "When" }), h("th", { class: "r", text: "Purchases" }), h("th", { class: "r", text: "Spent" }), h("th", { class: "r", text: "From the centre" }))),
-    h("tbody", {}, ...P.map((p) => h("tr", {}, h("td", {}, h("div", { text: p.name }), p.merchants.length > 1 ? h("div", { class: "muted", style: "font-size:13px", text: p.merchants.join(", ") }) : null, p.visits > 1 && p.mean != null ? h("div", { class: "muted num", style: "font-size:13px", text: "smallest " + money(p.smallest) + " · mean " + money(p.mean) + " · largest " + money(p.largest) }) : null), h("td", { class: "num", text: whenLabel(p.dates) }), h("td", { class: "r num", text: String(p.visits) }), h("td", { class: "r num", text: money(p.spent) }), h("td", { class: "r num muted", text: km(p).toFixed(1) + " km" })))))));
+    h("tbody", {}, ...P.map((p) => h("tr", {}, h("td", {}, h("div", { text: p.name }), p.merchants.length > 1 ? h("div", { class: "muted", style: "font-size:13px", text: p.merchants.join(", ") }) : null, p.visits > 1 && p.mean != null ? h("div", { class: "muted num", style: "font-size:13px", text: "smallest " + money(p.smallest) + " · mean " + money(p.mean) + " · largest " + money(p.largest) }) : null), h("td", { class: "num", text: p.days ? dayYear(p.dates[0]) + " – " + dayYear(p.dates[1]) : whenLabel(p.dates) }), h("td", { class: "r num", text: String(p.visits) }), h("td", { class: "r num", text: money(p.spent) }), h("td", { class: "r num muted", text: km(p).toFixed(1) + " km" })))))));
 }
 $("#mapToggle").addEventListener("click", () => { store.set("basemap", !store.get("basemap", true)); renderWhere(); });
 $("#whereToggle").addEventListener("click", (e) => { const on = e.target.getAttribute("aria-pressed") !== "true"; e.target.setAttribute("aria-pressed", on); e.target.textContent = on ? "Show as map" : "Show as table"; $("#whereMap").hidden = on; $("#whereTable").hidden = !on; });

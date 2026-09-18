@@ -49,8 +49,9 @@ ONLINE = ("AMAZON", "APPLE SERVICES", "APPLE COM", "PATREON", "GOOGLE", "OPENAI"
 # A web order says so in its statement line: a domain, "WEB ORDER", "BIGBOXCOM8069...", or a phone number where an
 # in-person line has the town ("... 888BIGBOXX 12345 XX USA", "... 800-555-0100 12345 XX USA"). Real data 2026-09-18:
 # two web orders billed from another state were pinned beside the shop he visits most.
-ONLINE_MARK = re.compile(r"\.(?:COM|NET|US|ORG|IO|AI)\b|\bWWW\b|\bWEB ?ORDER\b|^[A-Z]+COM\d"
-                         r"|(?:\b\d{3}-\d{3}-\d{3,4}|\b\d{3}-\d{7}|\b\d{10}|\b8(?:00|33|44|55|66|77|88)[A-Z]{7})\s+\d{5}(?:-\d{4})?\s*[A-Z]{2}\s+USA?\s*$")
+PHONE_FOR_TOWN = re.compile(r"(?:\b\d{3}-\d{3}-\d{3,4}|\b\d{3}-\d{7}|\b\d{10}|\b8(?:00|33|44|55|66|77|88)[A-Z]{7})\s+\d{5}(?:-\d{4})?\s*[A-Z]{2}\s+USA?\s*$")
+ONLINE_MARK = re.compile(r"\.(?:COM|NET|US|ORG|IO|AI)\b|\bWWW\b|\bWEB ?ORDER\b|^[A-Z]+COM\d|" + PHONE_FOR_TOWN.pattern)
+STAYS = ("Travel",)         # a hotel prints its reservations line where the town goes, and he slept there all the same
 # pay on the way out; everything else (counters, pumps), on the way in
 CHECKOUT_LAST = ("Groceries", "Shopping", "Pharmacy", "Home & hardware", "Electronics", "Clothing", "Hobby & craft",
                  "Music gear", "Alcohol", "Treats & gifts", "Health & dental", "Car care")
@@ -91,7 +92,8 @@ def channel(row, hint, billed):
         return "online"             # no address tail at all: a web checkout
     line = re.sub(r"\s*\((?:RETURN|REVERSAL)\)\s*$", "", (row.get("description") or "").upper().strip())
     if ONLINE_MARK.search(line.replace("GOSQ.COM", " ")):          # Square prints its own domain where the town goes, on a counter sale too
-        return "online"
+        if not (row.get("_cat") in STAYS and PHONE_FOR_TOWN.search(line) and not ONLINE_MARK.search(PHONE_FOR_TOWN.sub("", line))):
+            return "online"
     return "in_person"
 
 
@@ -434,7 +436,9 @@ AREA_FADES_S = 4 * 3600      # a last-seen position says less and less, and noth
 
 def guess_purchase(purchases, timed, habit_keys, when, here=None, merchant_geo=None, approx=None):
     """purchases = prepared rows; timed = [{ts, mkey}]; when = datetime of the tap;
-    here = (lat, lon, age_seconds) | None; merchant_geo = {mkey: (lat, lon)};
+    here = (lat, lon, age_seconds) | None; merchant_geo = {mkey: (lat, lon)} or {mkey: [(lat, lon, approx), ...]} -
+    a chain has a pin per branch, and standing in ANY of them is standing in that merchant (one pin per key meant
+    the branch in the last ZIP, so a fresh fix inside his own grocery store matched nothing);
     approx = mkeys whose position is only the TOWN's (not in the index): near means "in that town".
     -> {merchant, mkey, category, p, basis, runner_up} | None"""
     from datetime import timedelta
@@ -447,6 +451,9 @@ def guess_purchase(purchases, timed, habit_keys, when, here=None, merchant_geo=N
             basis[k].append(why)
 
     approx = approx or set()
+    spots = dict((k, [(p[0], p[1], bool(p[2]) if len(p) > 2 else k in approx) for p in (v if isinstance(v, list) else [v])])
+                 for k, v in (merchant_geo or {}).items())
+    within = lambda k, limit, rough: any(a == rough and km((here[0], here[1]), (la, lo)) <= limit for la, lo, a in spots[k])
     for r in purchases:          # everywhere he has ever bought can be the answer; lately counts for more
         lately = r["_d"] >= when.date() - timedelta(days=60)
         add(r["_m"], (0.05 if lately else 0.015) * (1.6 if r["_d"].weekday() == when.weekday() else 1.0),
@@ -457,9 +464,9 @@ def guess_purchase(purchases, timed, habit_keys, when, here=None, merchant_geo=N
         if dh <= 2:
             add(t["mkey"], (1.0 if dh <= 1 else 0.5) * (1.5 if th.weekday() == when.weekday() else 1.0), "you have bought there around this hour before")
     if here and here[2] <= FRESH_FIX_S and merchant_geo:
-        near = [k for k, pos in merchant_geo.items() if k not in approx and km((here[0], here[1]), pos) <= 0.3]
+        near = [k for k in spots if within(k, 0.3, False)]
         if not near:        # nobody he knows is at this exact spot - but a merchant known only by its town may well be
-            near = [k for k, pos in merchant_geo.items() if k in approx and km((here[0], here[1]), pos) <= AREA_KM]
+            near = [k for k in spots if within(k, AREA_KM, True)]
         if near:
             # Standing in the shop is not one more vote, it is the answer: eleven past coffees at this hour
             # once outvoted a fresh fix inside the grocery store. Everywhere he is NOT falls away.
@@ -479,8 +486,7 @@ def guess_purchase(purchases, timed, habit_keys, when, here=None, merchant_geo=N
         w = 1.0 - here[2] / float(AREA_FADES_S)
         mins = int(here[2] // 60)
         for k in list(score):
-            pos = merchant_geo.get(k)
-            if pos and km((here[0], here[1]), pos) <= AREA_KM:
+            if k in spots and (within(k, AREA_KM, False) or within(k, AREA_KM, True)):
                 score[k] *= 1.0 + 8.0 * w
                 basis[k].insert(0, "you were last seen in that area %d min earlier, and have not driven since" % mins)
             else:
@@ -495,11 +501,11 @@ def guess_purchase(purchases, timed, habit_keys, when, here=None, merchant_geo=N
     for r in rows:
         cats[r["_cat"]] = cats.get(r["_cat"], 0) + 1
     amounts = sorted(r["amount"] for r in rows)
-    return {"mkey": k, "merchant": rows[-1].get("merchant") or k, "category": max(cats, key=cats.get),
+    return {"mkey": k, "merchant": lc.display_name(rows[-1]), "category": max(cats, key=cats.get),
             "p": round(top / total, 2), "basis": basis[k], "count": len(rows), "typical": amounts[len(amounts) // 2],
             "habit": k in habit_keys,
             "candidates": [{"mkey": kk, "p": round(v / total, 2),
-                            "merchant": next((r.get("merchant") or kk for r in reversed(purchases) if r["_m"] == kk), kk)}
+                            "merchant": next((lc.display_name(r) for r in reversed(purchases) if r["_m"] == kk), kk)}
                            for kk, v in ranked[:3]]}
 
 
@@ -990,7 +996,7 @@ def build(verbose=True):
             continue
         k = (r["_m"], hint["zip"])
         if geocode and home and (k not in known or known[k].get("source") in ("name", "unresolved", "city-area")):
-            away = hint["state"] != home_state
+            away = hint["state"] != home_state or bool(PHONE_FOR_TOWN.search((r.get("description") or "").upper().strip()))      # no town on the line: nowhere to look, and near HOME is a guess
             city = None if away else city_of(r.get("description"), home)
             merchant = r.get("merchant") or r["_m"]
             g = None
