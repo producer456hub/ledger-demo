@@ -182,7 +182,7 @@ class Data(object):
             if kept < 0.01:
                 continue
             chan[m["channel"]] = chan.get(m["channel"], 0) + 1
-            base = {"amount": kept, "merchant": r.get("merchant") or r["_m"], "mkey": r["_m"], "category": r["_cat"], "date": r["date"]}
+            base = {"uid": r.get("uid"), "amount": kept, "merchant": r.get("merchant") or r["_m"], "mkey": r["_m"], "category": r["_cat"], "date": r["date"]}
             if m["ts"] is not None:
                 timed.append(dict(base, ts=m["ts"], time_source=m["time_source"]))
             if m["merchant_lat"] is not None:
@@ -824,6 +824,22 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, {"ok": True, "count": conn.execute("SELECT COUNT(*) FROM taps").fetchone()[0], "taps": rows_})
                 if path == "/api/ledger/brief":
                     return self._send(200, lc.brief(D.rows, D.today), "text/plain; charset=utf-8")
+                if path == "/api/ledger/chart":            # the page's make-your-own chart; lc.custom_chart does the sums
+                    from datetime import timedelta
+                    by, measure = q.get("by") or "month", q.get("measure") or "spent"
+                    if by not in lc.CHART_BY or measure not in lc.CHART_MEASURE:
+                        return self._send(400, {"error": "by is one of %s; measure one of %s" % (", ".join(lc.CHART_BY), ", ".join(lc.CHART_MEASURE))})
+                    try:
+                        until = lc.d(q["until"]) if q.get("until") else D.today
+                        since = lc.d(q["since"]) if q.get("since") else until - timedelta(days=365)
+                    except ValueError:
+                        return self._send(400, {"error": "dates are YYYY-MM-DD"})
+                    if since > until or (until - since).days > 3700:
+                        return self._send(400, {"error": "the range runs backwards, or is longer than ten years"})
+                    out = lc.custom_chart(D.rows, since, until, by, measure, split=q.get("split") in ("1", "true", "category"),
+                                          category=q.get("category") or None, merchant=(q.get("merchant") or "")[:80] or None,
+                                          intent=q.get("intent") or None, intents=D.intents, timed=D.timed)
+                    return self._send(200, dict(out, ok=True, since=since.isoformat(), until=until.isoformat()))
                 if path == "/api/ledger/transactions":
                     rows = D.rows
                     if q.get("since"):

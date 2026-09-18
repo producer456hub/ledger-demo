@@ -161,13 +161,27 @@ tr.click { cursor:pointer; } tr.click:hover td { background:var(--ui-inset); }
 .why-none { font-size:13px; color:var(--ui-secondary); padding:10px 0 2px; }
 /* the scale: every signal on one line from "spend less" to "spend more"; how solid a dot is says how much to trust it */
 #whyScale > svg { display:block; width:100%; height:auto; overflow:visible; }
-#whyScale text { font-size:12px; fill:var(--ui-text); paint-order:stroke; stroke:var(--ui-surface); stroke-width:4px; stroke-linejoin:round; }
+#whyScale { margin:10px 0 4px; }
+#whyScale text { font-size:13px; fill:var(--ui-text); paint-order:stroke; stroke:var(--ui-surface); stroke-width:4px; stroke-linejoin:round; }
+#whyScale text.st { font-size:14px; font-weight:700; }
+#whyScale text.end { font-size:13px; font-weight:600; }
 #whyScale text.m { fill:var(--ui-secondary); }
-#whyScale text.e { font-size:11px; fill:var(--ui-secondary); }
-.skey { display:flex; flex-wrap:wrap; gap:4px 16px; font-size:12px; color:var(--ui-secondary); margin:4px 0 2px; }
-.skey span { display:inline-flex; align-items:center; gap:6px; }
-.skey svg { width:14px; height:14px; flex:none; }
+#whyScale text.e { font-size:12px; fill:var(--ui-secondary); }
+.skey { display:flex; flex-wrap:wrap; gap:6px 18px; font-size:13px; color:var(--ui-secondary); margin:6px 0 2px; }
+.skey span { display:inline-flex; align-items:center; gap:7px; }
+.skey svg { width:16px; height:16px; flex:none; }
 .caveat { font-size:12px; color:var(--ui-secondary); margin:2px 0 6px; }
+/* make your own chart: the controls are the question */
+.mk { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin:8px 0 0; font-size:13px; color:var(--ui-secondary); }
+.mk label { display:inline-flex; align-items:center; gap:6px; }
+.mk label[hidden] { display:none; }
+.mk select, .mk input { border:1px solid var(--ui-border); border-radius:8px; padding:4px 8px; min-height:34px; background:var(--ui-surface); color:var(--ui-text); font:inherit; font-size:14px; }
+.mk input[type=search] { width:150px; }
+.presets { display:inline-flex; gap:4px; flex-wrap:wrap; }
+.presets button { border:1px solid var(--ui-border); border-radius:999px; background:transparent; color:var(--ui-accent); font:inherit; font-size:13px; padding:3px 10px; cursor:pointer; }
+.presets button[aria-pressed=true] { background:var(--ui-accent); color:var(--ui-surface); border-color:var(--ui-accent); }
+#mkSub { margin-top:10px; }
+#mkChart svg { display:block; width:100%; height:auto; }
 .early { margin-top:12px; border:1px solid var(--grid); border-radius:8px; padding:4px 12px; }
 .early summary { cursor:pointer; padding:6px 0; font-size:14px; }
 .early .row { display:grid; grid-template-columns:minmax(170px, 36%) 1fr auto; gap:6px 16px; align-items:center; padding:7px 0; font-size:13px; }
@@ -553,6 +567,33 @@ The page runs the real LEDGER server inside your browser; anything you change li
     <div id="intentRows"></div>
   </section>
 
+  <section class="card" id="mkCard" data-tab="patterns" data-info="Pick what to show, how to group it, the dates and any filter. Returns come off the bar they land in. A month or week with no statement behind it is left empty, never counted as $0. Hour of day can only use the purchases whose time is known.">
+    <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
+      <h2 style="flex:1">Make your own chart</h2>
+      <button class="btn quiet" id="mkToggle" aria-pressed="false">Show as table</button>
+    </div>
+    <div class="mk">
+      <label>Show <select id="mkMeasure"><option value="spent">Spending</option><option value="count">Number of purchases</option><option value="average">Average purchase</option></select></label>
+      <label>By <select id="mkBy"><option value="month">Month</option><option value="week">Week</option><option value="weekday">Day of the week</option><option value="hour">Hour of the day</option><option value="category">Category</option><option value="merchant">Merchant</option><option value="reason">Reason</option></select></label>
+      <label id="mkSplitL">Split <select id="mkSplit"><option value="">No split</option><option value="category">By category</option></select></label>
+      <label id="mkTypeL">As <select id="mkType"><option value="bar">Bars</option><option value="line">Line</option></select></label>
+    </div>
+    <div class="mk">
+      <label>From <input type="date" id="mkSince"></label>
+      <label>To <input type="date" id="mkUntil"></label>
+      <span class="presets" id="mkPresets"></span>
+    </div>
+    <div class="mk">
+      <label>Category <select id="mkCat"></select></label>
+      <label>Merchant <input type="search" id="mkMerchant" placeholder="any" autocomplete="off"></label>
+      <label>Reason <select id="mkIntent"></select></label>
+      <button class="btn quiet" id="mkReset" type="button">Start over</button>
+    </div>
+    <p class="sub" id="mkSub"></p>
+    <div class="legend" id="mkLegend"></div>
+    <div id="mkChart"></div><div id="mkTable" hidden></div>
+  </section>
+
   <!-- ============ PLAN ============ -->
   <section class="card" id="askCard" data-tab="plan" data-info="In the real thing a local language model does the words and LEDGER does the arithmetic. The demo has no model: your question goes straight to LEDGER's own calculators, so every figure still comes out of the numbers on this page.">
     <h2>Ask a question</h2>
@@ -671,7 +712,7 @@ function showTab(t, keepScroll) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === t));
   if (location.hash.slice(1) !== t) history.replaceState(null, "", location.pathname + location.search + "#" + t);
   if (!keepScroll) scrollTo({ top: 0 });
-  if (D && D.status.rows) requestAnimationFrame(() => { renderPace(); renderTrend(); renderWhere(); renderWhy(); });   // drawn while hidden, the charts measured nothing
+  if (D && D.status.rows) requestAnimationFrame(() => { renderPace(); renderTrend(); renderWhere(); renderWhy(); mkDraw(); });   // drawn while hidden, the charts measured nothing
 }
 function goTo(t, sel) {
   showTab(t, true);
@@ -758,7 +799,7 @@ function render() {
   if (empty) return renderSetup();
   renderHero(); renderDue(); renderPace(); renderCats(); renderMerchants(); renderBudgets();
   renderAsk(); renderCut(); renderBuild(); renderNudges(); renderIntent(); renderWhy(); renderWhen(); renderWhere();
-  renderPrio(); renderTrend(); renderHabits(); renderRecurring(); renderFlags(); renderRefunds(); renderLook(); renderKnow();
+  renderPrio(); renderTrend(); renderHabits(); renderRecurring(); renderFlags(); renderRefunds(); renderLook(); renderKnow(); renderMk();
   fillFilters(); loadTx(true);
 }
 
@@ -1222,37 +1263,40 @@ function renderWhyScale(an, ds, real) {
   const W = Math.max(300, Math.round($("#whyScale").clientWidth || 720)), L = 14, R = 14, lim = Math.max(15, ...judged.map((q) => Math.abs(q.v))) * 1.15;
   const x = (v) => L + (Math.max(-lim, Math.min(lim, v)) / lim + 1) / 2 * (W - L - R);
   const order = pts.slice().sort((a, b) => x(a.v) - x(b.v)), ends = [];      // label lanes, filled lowest-first so nothing overlaps
+  const RAD = { strong: 10, chance: 8, early: 7 };
   for (const q of order) {
-    const lab = (q.v < -lim ? "‹ " : "") + q.name + (q.v > lim ? " ›" : ""), w = lab.length * 6.4 + 8;
-    const cx = Math.max(L + w / 2, Math.min(W - R - w / 2, x(q.v)));
-    let lane = ends.findIndex((e) => e + 6 < cx - w / 2); if (lane < 0) { lane = ends.length; ends.push(0); }
+    const lab = (q.v < -lim ? "‹ " : "") + q.name + (q.t === "early" ? "" : " " + pc(q.v)) + (q.v > lim ? " ›" : "");
+    const w = lab.length * (q.t === "strong" ? 8 : 7.2) + 12, cx = Math.max(L + w / 2, Math.min(W - R - w / 2, x(q.v)));
+    let lane = ends.findIndex((e) => e + 8 < cx - w / 2); if (lane < 0) { lane = ends.length; ends.push(0); }
     ends[lane] = cx + w / 2; Object.assign(q, { lab, cx, lane });
   }
-  const laneH = 17, top = 6, axisY = top + ends.length * laneH + 14, H = axisY + 34;
+  const laneH = 22, top = 10, band = 28, axisY = top + ends.length * laneH + 24, H = axisY + band / 2 + 30;
   const svg = s("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Each signal from spend less to spend more: " + pts.map((q) => q.name + " " + pc(q.v) + " (" + q.t + ")").join(", ") });
-  svg.append(s("line", { x1: L, x2: W - R, y1: axisY, y2: axisY, stroke: "var(--ui-border)", "stroke-width": 2 }),
-    s("line", { x1: x(0), x2: x(0), y1: axisY - 7, y2: axisY + 7, stroke: "var(--ui-secondary)", "stroke-width": 2 }),
-    s("text", { x: L, y: H - 4, class: "m" }, "← spend less"), s("text", { x: W - R, y: H - 4, "text-anchor": "end", class: "m" }, "spend more →"),
-    s("text", { x: x(0), y: H - 4, "text-anchor": "middle", class: "m" }, "no difference"));
+  // the track: one wide band the dots sit on, zero marked across it, the two directions named at its ends
+  svg.append(s("rect", { x: L, y: axisY - band / 2, width: W - L - R, height: band, rx: band / 2, fill: "var(--ui-inset)", stroke: "var(--ui-border)", "stroke-width": 1 }),
+    s("line", { x1: x(0), x2: x(0), y1: axisY - band / 2 - 5, y2: axisY + band / 2 + 5, stroke: "var(--ui-text)", "stroke-width": 2 }),
+    s("text", { x: L + 2, y: H - 6, class: "end" }, "← spend less"), s("text", { x: W - R - 2, y: H - 6, "text-anchor": "end", class: "end" }, "spend more →"),
+    s("text", { x: x(0), y: H - 6, "text-anchor": "middle", class: "m" }, "no difference"));
   const leaders = s("g"); svg.append(leaders);              // every leader line under every label
   for (const q of order.slice().sort((a, b) => ({ early: 0, chance: 1, strong: 2 })[a.t] - ({ early: 0, chance: 1, strong: 2 })[b.t])) {     // solid dots drawn last, on top
-    const ly = axisY - 14 - q.lane * laneH, dx = x(q.v), g = s("g", { tabindex: 0 });
-    leaders.append(s("line", { x1: q.cx, x2: dx, y1: ly + 3, y2: axisY - 6, stroke: "var(--ui-border)", "stroke-width": 1 }));
-    g.append(q.t === "strong" ? s("circle", { cx: dx, cy: axisY, r: 7, fill: "var(--s1)", stroke: "var(--ui-surface)", "stroke-width": 2 })
-      : q.t === "chance" ? s("circle", { cx: dx, cy: axisY, r: 5.5, fill: "var(--ui-surface)", stroke: "var(--ui-secondary)", "stroke-width": 1.5 })
-      : s("circle", { cx: dx, cy: axisY, r: 4.5, fill: "none", stroke: "var(--context)", "stroke-width": 1.5, "stroke-dasharray": "2 2" }),
-      s("text", { x: q.cx, y: ly, "text-anchor": "middle", class: q.t === "strong" ? "" : q.t === "chance" ? "m" : "e", style: q.t === "strong" ? "font-weight:600" : "" }, q.lab));
+    const ly = axisY - band / 2 - 12 - q.lane * laneH, dx = x(q.v), g = s("g", { tabindex: 0 });
+    leaders.append(s("line", { x1: q.cx, x2: dx, y1: ly + 4, y2: axisY - RAD[q.t] - 2, stroke: q.t === "strong" ? "var(--s1)" : "var(--ui-border)", "stroke-width": q.t === "strong" ? 1.5 : 1 }));
+    if (q.t === "strong") g.append(s("circle", { cx: dx, cy: axisY, r: 16, fill: "var(--s1)", opacity: .18 }));       // a halo: the one that counts
+    g.append(q.t === "strong" ? s("circle", { cx: dx, cy: axisY, r: RAD.strong, fill: "var(--s1)", stroke: "var(--ui-surface)", "stroke-width": 2.5 })
+      : q.t === "chance" ? s("circle", { cx: dx, cy: axisY, r: RAD.chance, fill: "var(--ui-surface)", stroke: "var(--ui-secondary)", "stroke-width": 2.5 })
+      : s("circle", { cx: dx, cy: axisY, r: RAD.early, fill: "none", stroke: "var(--context)", "stroke-width": 2, "stroke-dasharray": "3 3" }),
+      s("text", { x: q.cx, y: ly, "text-anchor": "middle", class: q.t === "strong" ? "st" : q.t === "chance" ? "" : "e" }, q.lab));
     const tip = (ev) => showTip(ev, whySay(q.d), [["On those days", pc(q.v) + " vs an average day (" + signed(q.d.diff) + " a day)"],
       ["How sure", q.t === "strong" ? "a real link - enough days, and beyond chance" : q.t === "chance" ? "could be chance - a neat stat, not a pattern" : "too early - " + (q.d.n_low + q.d.n_high) + " of " + (q.d.enough_days || 60) + " days"]]);
     g.addEventListener("pointermove", tip); g.addEventListener("focus", tip); g.addEventListener("pointerleave", hideTip); g.addEventListener("blur", hideTip);
     svg.append(g);
   }
-  const icon = (c) => { const i = s("svg", { viewBox: "0 0 14 14" }); i.append(c); return i; };
+  const icon = (c) => { const i = s("svg", { viewBox: "0 0 16 16" }); i.append(c); return i; };
   put($("#whyScale"), svg,
     h("div", { class: "skey" },
-      h("span", {}, icon(s("circle", { cx: 7, cy: 7, r: 5.5, fill: "var(--s1)" })), "real link - enough days, beyond chance"),
-      h("span", {}, icon(s("circle", { cx: 7, cy: 7, r: 4.5, fill: "none", stroke: "var(--ui-secondary)", "stroke-width": 1.5 })), "could be chance - a neat stat"),
-      h("span", {}, icon(s("circle", { cx: 7, cy: 7, r: 4, fill: "none", stroke: "var(--context)", "stroke-width": 1.5, "stroke-dasharray": "2 2" })), "too early to tell")),
+      h("span", {}, icon(s("circle", { cx: 8, cy: 8, r: 6.5, fill: "var(--s1)" })), "real link - enough days, beyond chance"),
+      h("span", {}, icon(s("circle", { cx: 8, cy: 8, r: 5.5, fill: "none", stroke: "var(--ui-secondary)", "stroke-width": 2 })), "could be chance - a neat stat"),
+      h("span", {}, icon(s("circle", { cx: 8, cy: 8, r: 5, fill: "none", stroke: "var(--context)", "stroke-width": 1.5, "stroke-dasharray": "2 2" })), "too early to tell")),
     h("p", { class: "caveat", text: "A dot shows how things have lined up so far - it can just appear this way, and it never says one causes the other." }));
 }
 
@@ -1519,6 +1563,122 @@ function renderLook() {
   title("#flagCard", n ? n + " thing" + (n === 1 ? " needs" : "s need") + " a look" : "Nothing needs a look");
 }
 
+/* ---- make your own chart. The controls are the question; the server's lc.custom_chart does the sums (returns netted,
+   a month with no statement empty, never $0). Settings are a per-viewer convenience in localStorage, nothing more. */
+const MK_DEF = { measure: "spent", by: "month", split: "", type: "bar", range: "365", since: "", until: "", category: "", merchant: "", intent: "" };
+const MK_TIME = ["month", "week", "weekday", "hour"];
+let MK = Object.assign({}, MK_DEF, store.get("mk", {})), mkRes = null, mkT = null, mkSeq = 0;
+const isoDay = (dt) => dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
+function mkDates() {
+  if (MK.range === "custom" && MK.since && MK.until) return [MK.since, MK.until];
+  if (MK.range === "all") return [(D.months[0] || D.today.slice(0, 7)) + "-01", D.today];
+  const s = new Date(D.today + "T12:00:00"); s.setDate(s.getDate() - Number(MK.range || 365) + 1);
+  return [isoDay(s), D.today];
+}
+function mkSetup() {
+  put($("#mkCat"), h("option", { value: "", text: "Any" }), ...D.categories_known.map((c) => h("option", { value: c, text: c })));
+  put($("#mkIntent"), h("option", { value: "", text: "Any" }), ...D.intents.map((i) => h("option", { value: i.key, text: i.label })), h("option", { value: "none", text: "Could not tell" }));
+  put($("#mkPresets"), ...[["30", "30 days"], ["90", "90 days"], ["365", "1 year"], ["all", "Everything"]].map(([v, t]) =>
+    h("button", { type: "button", "data-r": v, text: t, onclick: () => { MK.range = v; mkChanged(); } })));
+  if (mkSetup.done) return; mkSetup.done = true;                  // listeners once; the option lists follow the data
+  for (const [id, k] of [["#mkMeasure", "measure"], ["#mkBy", "by"], ["#mkSplit", "split"], ["#mkType", "type"], ["#mkCat", "category"], ["#mkIntent", "intent"]])
+    $(id).addEventListener("change", (e) => { MK[k] = e.target.value; mkChanged(); });
+  for (const [id, k] of [["#mkSince", "since"], ["#mkUntil", "until"]])
+    $(id).addEventListener("change", (e) => { const [s, u] = mkDates(); Object.assign(MK, { since: s, until: u, range: "custom" }); MK[k] = e.target.value; mkChanged(); });
+  $("#mkMerchant").addEventListener("input", (e) => { MK.merchant = e.target.value; clearTimeout(mkT); mkT = setTimeout(mkChanged, 350); });
+  $("#mkReset").addEventListener("click", () => { MK = Object.assign({}, MK_DEF); mkChanged(); });
+  $("#mkToggle").addEventListener("click", (e) => { const on = e.target.getAttribute("aria-pressed") !== "true"; e.target.setAttribute("aria-pressed", on);
+    e.target.textContent = on ? "Show as chart" : "Show as table"; $("#mkChart").hidden = on; $("#mkTable").hidden = !on; });
+}
+function mkSync() {
+  const [s, u] = mkDates(), time = MK_TIME.includes(MK.by);
+  $("#mkMeasure").value = MK.measure; $("#mkBy").value = MK.by; $("#mkSplit").value = MK.split; $("#mkType").value = MK.type;
+  $("#mkCat").value = MK.category; $("#mkIntent").value = MK.intent;
+  if (document.activeElement !== $("#mkMerchant")) $("#mkMerchant").value = MK.merchant;
+  $("#mkSince").value = s; $("#mkUntil").value = u;
+  $("#mkSplitL").hidden = !time || MK.measure === "average"; $("#mkTypeL").hidden = !time;       // averages never stack; a ranking is always bars
+  for (const b of document.querySelectorAll("#mkPresets button")) b.setAttribute("aria-pressed", String(b.dataset.r === MK.range));
+}
+function mkChanged() { store.set("mk", MK); renderMk(); }
+async function renderMk() {
+  mkSetup(); mkSync();
+  const [s, u] = mkDates(), p = new URLSearchParams({ by: MK.by, measure: MK.measure, since: s, until: u });
+  if (MK.split && MK_TIME.includes(MK.by)) p.set("split", MK.split);
+  for (const k of ["category", "merchant", "intent"]) if (MK[k]) p.set(k, MK[k]);
+  const seq = ++mkSeq;
+  try { const r = await api("/api/ledger/chart?" + p); if (seq !== mkSeq) return; mkRes = r; mkDraw(); }       // a stale answer never paints over a newer one
+  catch (e) { title("#mkCard", "Make your own chart"); $("#mkSub").textContent = e.message; put($("#mkChart")); put($("#mkTable")); }
+}
+function mkDrill(by, key, label) {        // a bar is a way into the ledger, like every other bar on the page
+  $("#q").value = by === "merchant" ? label : ""; $("#fCat").value = by === "category" ? key : ""; $("#fClass").value = "";
+  $("#fIntent").value = by === "reason" && key !== "none" ? key : ""; $("#fRange").value = "all";
+  loadTx(true); showTx();
+}
+function mkDraw() {
+  const r = mkRes; if (!r) return;
+  const fmt = (v) => v == null ? "no statement" : r.measure === "count" ? String(v) : r.measure === "spent" ? money0(v) : money(v);   // whole dollars on the chart
+  const exact = (v) => v == null ? "no statement" : r.measure === "count" ? String(v) : money(v);                                    // cents in the table
+  const time = MK_TIME.includes(r.by), n = r.labels.length;
+  const total = r.labels.map((_, i) => r.series.every((x) => x.values[i] == null) ? null : r.series.reduce((a, x) => a + (x.values[i] || 0), 0));
+  let best = -1; total.forEach((v, i) => { if (v != null && r.keys[i] !== null && (best < 0 || v > total[best])) best = i; });
+  const lab = (i) => r.by === "month" ? monthName(r.labels[i]) : r.by === "week" ? "Week of " + dayYear(r.labels[i]) : r.labels[i];
+  title("#mkCard", !r.n || best < 0 ? "Nothing matches" : (r.measure === "average" ? "Highest average: " : time ? "Highest: " : "Most: ") + lab(best) + " · " + fmt(total[best]));
+  $("#mkSub").textContent = dayYear(r.since) + " – " + dayYear(r.until) + " · " + r.n + " purchase" + (r.n === 1 ? "" : "s")
+    + (r.measure === "spent" ? " · " + money0(r.total) + " after returns" : "") + (r.note ? " · " + r.note : "");
+  const colors = r.series.map((x, i) => x.name === "Everything else" ? "--other" : r.series.length === 1 ? "--s1" : SERIES[i % 5]);
+  put($("#mkLegend"), ...(r.series.length > 1 ? r.series.map((x, i) => h("span", {}, h("i", { class: "key box", style: "background:var(" + colors[i] + ")" }), x.name)) : []));
+  // the table: every number the chart draws
+  put($("#mkTable"), h("div", { style: "overflow-x:auto" }, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", { text: { month: "Month", week: "Week of", weekday: "Day", hour: "Hour", category: "Category", merchant: "Merchant", reason: "Reason" }[r.by] }),
+      ...r.series.map((x) => h("th", { class: "r", text: r.series.length > 1 ? x.name : { spent: "Spent", count: "Purchases", average: "Average" }[r.measure] })),
+      r.stacked ? h("th", { class: "r", text: "Total" }) : null)),
+    h("tbody", {}, ...r.labels.map((l, i) => h("tr", {}, h("td", { text: r.by === "week" ? dayYear(l) : r.by === "month" ? monthName(l) : l }),
+      ...r.series.map((x) => h("td", { class: "r num" + (x.values[i] == null ? " muted" : ""), text: exact(x.values[i]) })),
+      r.stacked ? h("td", { class: "r num" }, h("b", { text: exact(total[i]) })) : null))))));
+  if (!time) {                            // a ranking: labelled horizontal bars, biggest first, the tail in the neutral colour
+    const vals = r.series[0].values, mx = Math.max(1e-9, ...vals.map((v) => Math.abs(v || 0)));
+    put($("#mkChart"), r.n ? h("div", { class: "bars" }, ...r.labels.map((l, i) => {
+      const b = h("button", { class: "bar", type: "button", "aria-label": l + " " + fmt(vals[i]) }, h("span", { class: "name", text: l }),
+        h("span", { class: "track" }, h("span", { class: "fill", style: "width:" + (Math.max(0, vals[i] || 0) / mx * 100).toFixed(1) + "%" + (r.keys[i] === null ? ";background:var(--other)" : "") })),
+        h("span", { class: "val num", text: fmt(vals[i]) }));
+      if (r.keys[i] !== null) b.addEventListener("click", () => mkDrill(r.by, r.keys[i], l));
+      return b; })) : h("div", { class: "empty", text: "Nothing in those dates matches - widen the dates or clear a filter." }));
+    return;
+  }
+  // a time axis: columns (stacked when split) or lines; an uncovered month is a gap with a small grey dash
+  const line = MK.type === "line", stacked = r.stacked && !line;
+  const W = Math.max(300, Math.round($("#mkChart").clientWidth || 720)), H = W < 480 ? 220 : 260, L = 54, R = 12, T = 16, B = 26;
+  const band = (W - L - R) / Math.max(1, n), bw = Math.min(26, band * .66), step = Math.max(1, Math.ceil(46 / band));
+  const top = niceMax(Math.max(1e-9, ...(stacked ? total.map((v) => v || 0) : r.series.flatMap((x) => x.values.map((v) => v || 0)))));
+  const y = (v) => T + (1 - Math.max(0, v) / top) * (H - T - B), cx = (i) => L + band * (i + .5);
+  const tick = (i) => r.by === "month" ? monthTick(r.labels[i], r.labels[i - 1]) : r.by === "week" ? dayLabel(r.labels[i]) : r.by === "weekday" ? r.labels[i].slice(0, 3)
+    : (r.keys[i] % 12 || 12) + (r.keys[i] < 12 ? "a" : "p");
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": $("#mkCard h2 .t").textContent });
+  for (let k = 0; k <= 4; k++) { const v = top * k / 4; svg.append(s("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: k ? "var(--grid)" : "var(--ui-border)", "stroke-width": 1 }),
+    s("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end", class: "num" }, r.measure === "count" ? String(Math.round(v)) : usd.format(v))); }
+  r.labels.forEach((_, i) => { if (i % step === 0) svg.append(s("text", { x: cx(i), y: H - 8, "text-anchor": "middle" }, tick(i))); });
+  if (line) {
+    r.series.forEach((x, si) => { let d = "", pen = false;
+      x.values.forEach((v, i) => { if (v == null) { pen = false; return; } d += (pen ? "L" : "M") + cx(i).toFixed(1) + " " + y(v).toFixed(1); pen = true; });
+      svg.append(s("path", { d, fill: "none", stroke: "var(" + colors[si] + ")", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+      x.values.forEach((v, i) => { if (v != null && n <= 60) svg.append(s("circle", { cx: cx(i), cy: y(v), r: 2.5, fill: "var(" + colors[si] + ")" })); }); });
+  }
+  r.labels.forEach((_, i) => {
+    const g = s("g", { tabindex: 0 });
+    if (total[i] == null) g.append(s("line", { x1: cx(i) - bw / 2, x2: cx(i) + bw / 2, y1: y(0) - 2, y2: y(0) - 2, stroke: "var(--context)", "stroke-width": 2 }));
+    else if (!line) { let acc = 0;
+      r.series.forEach((x, si) => { const v = Math.max(0, x.values[i] || 0); if (!v) return;
+        const y0 = y(stacked ? acc : 0), y1 = y((stacked ? acc : 0) + v);
+        g.append(s("rect", { x: cx(i) - bw / 2, y: y1, width: bw, height: Math.max(1, y0 - y1), rx: stacked ? 0 : 3, fill: "var(" + colors[si] + ")" })); acc += v; }); }
+    g.append(s("rect", { x: cx(i) - band / 2, y: T, width: band, height: H - T - B, fill: "transparent" }));
+    const tip = (ev) => showTip(ev, lab(i), (total[i] == null ? [["", "no statement for these dates"]] : r.series.map((x, si) => [r.series.length > 1 ? x.name : { spent: "Spent", count: "Purchases", average: "Average" }[r.measure], fmt(x.values[i]), colors[si]]))
+      .concat(r.stacked && total[i] != null ? [["Total", fmt(total[i])]] : []));
+    g.addEventListener("pointermove", tip); g.addEventListener("focus", tip); g.addEventListener("pointerleave", hideTip); g.addEventListener("blur", hideTip);
+    svg.append(g);
+  });
+  put($("#mkChart"), svg);
+}
+
 /* ---- the ledger itself */
 function fillFilters() {
   const ci = $("#fIntent").value;
@@ -1591,7 +1751,7 @@ $("#prev").addEventListener("click", () => { const i = D.months.indexOf(D.month)
 $("#next").addEventListener("click", () => { const i = D.months.indexOf(D.month); if (i >= 0 && i < D.months.length - 1) { month = D.months[i + 1]; load(true); } });
 
 let rsT, lastW = innerWidth;
-addEventListener("resize", () => { if (innerWidth === lastW || !D || !D.status.rows) return; lastW = innerWidth; clearTimeout(rsT); rsT = setTimeout(() => { renderPace(); renderTrend(); renderWhere(); renderWhy(); }, 150); });
+addEventListener("resize", () => { if (innerWidth === lastW || !D || !D.status.rows) return; lastW = innerWidth; clearTimeout(rsT); rsT = setTimeout(() => { renderPace(); renderTrend(); renderWhere(); renderWhy(); mkDraw(); }, 150); });
 
 showTab(TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : store.get("tab", "month"), true);
 load(false);

@@ -74,8 +74,9 @@ _PUNCT = re.compile(r"[^A-Z0-9& ]+")
 # One merchant, several billing names. Amazon bills an order as AMAZON MKTPL*, AMZN MKTP US*, AMAZON MARK*, AMAZON RETA*
 # or AMAZON.COM* and refunds it as AMAZON MKTPLACE PMTS: five merchants on the page, and returns that matched no purchase.
 # Prime is a subscription with a series of its own and stays itself.
-_FAMILIES = ((re.compile(r"^(?:AMAZON|AMZN)(?!\s+PRIME)(?:\s+(?:MKTP\w*|MARK\w*|RETA\w*|COM|US)\b.*)?$"), "AMAZON"),)
-FAMILY_NAME = {"AMAZON": "Amazon"}          # what to call the family: its rows each carry one of the billing names
+_FAMILIES = ((re.compile(r"^(?:AMAZON|AMZN)(?!\s+PRIME)(?:\s+(?:MKTP\w*|MARK\w*|RETA\w*|COM|US)\b.*)?$"), "AMAZON"),
+             (re.compile(r"^B&H PHOTO\b.*$"), "B&H PHOTO"))      # bought as "B&H Photo Video", refunded as "B&H Photo 800-...": the return took an older purchase's shorter key and paired with nothing
+FAMILY_NAME = {"AMAZON": "Amazon", "B&H PHOTO": "B&H Photo"}          # what to call the family: its rows each carry one of the billing names
 
 
 def merchant_key(name, aliases=None):
@@ -1513,3 +1514,127 @@ def buildable_prompt(items):
             "lose by leaving. Be blunt: most things are NOT worth replacing, and a model subscription is not replaced by a "
             "weekend of code. End with the two or three that would actually pay off, and the yearly total they add up to.\n\n"
             + "\n".join(lines))
+
+
+# ------------------------------------------------------------ make your own chart
+CHART_BY = ("month", "week", "weekday", "hour", "category", "merchant", "reason")
+CHART_MEASURE = ("spent", "count", "average")
+CHART_TIME = ("month", "week", "weekday", "hour")      # an axis in order; the rest are ranked, biggest first
+
+
+def custom_chart(rows, since, until, by="month", measure="spent", split=False, category=None, merchant=None,
+                 intent=None, intents=None, timed=None, top=12):
+    """The page's make-your-own chart. Purchases in [since, until], each return netted into the bucket it lands in,
+    filtered (category, a merchant word, reason), grouped `by`, measured: "spent" (net $), "count" (purchases) or
+    "average" (spent on purchases / purchases). `split` stacks the five biggest categories on a time axis.
+    A month or week the statements do not cover is None, never 0 (coverage()); "hour" can only use the purchases
+    whose time is known (`timed`: rows with uid + ts), and says so in `note`.
+    -> {"by", "measure", "labels", "keys", "series": [{"name", "values"}], "n", "total", "note"}"""
+    intents = intents or {}
+    needle = (merchant or "").strip().lower()
+
+    def keep(r):
+        if category and r["_cat"] != category:
+            return False
+        if needle and needle not in (display_name(r) + " " + (r.get("merchant") or "")).lower():
+            return False
+        if intent == "none":
+            return r["_k"] == "purchase" and r.get("uid") not in intents
+        if intent and intents.get(r.get("uid")) != intent:
+            return False
+        return True
+    base = [r for r in rows if r["_k"] in ("purchase", "refund") and since <= r["_d"] <= until and keep(r)]
+    note = None
+    if by == "hour":
+        by_uid = dict((r.get("uid"), r) for r in base)
+        base = [dict(by_uid[t["uid"]], _hour=datetime.fromtimestamp(t["ts"]).hour, amount=t["amount"])
+                for t in (timed or []) if t.get("uid") in by_uid]
+        note = "Only the %d purchases whose time of day is known; the statement itself has dates, not times." % len(base)
+
+    def key(r):
+        if by == "month":
+            return r["date"][:7]
+        if by == "week":
+            return (r["_d"] - timedelta(days=r["_d"].weekday())).isoformat()
+        if by == "weekday":
+            return r["_d"].weekday()
+        if by == "hour":
+            return r["_hour"]
+        if by == "category":
+            return r["_cat"]
+        if by == "merchant":
+            return r["_m"]
+        return intents.get(r.get("uid")) or "none"
+
+    # the axis
+    if by in ("month", "week"):
+        cov = coverage(rows)
+        keys, d = [], since if by == "month" else since - timedelta(days=since.weekday())
+        if by == "month":
+            d = date(since.year, since.month, 1)
+        while d <= until:
+            if by == "month":
+                s, e = month_bounds(d.strftime("%Y-%m"))
+                keys.append((d.strftime("%Y-%m"), covered_days(cov, max(s, since), min(e, until) + timedelta(days=1)) > 0))
+                d = (e + timedelta(days=1))
+            else:
+                keys.append((d.isoformat(), covered_days(cov, max(d, since), min(d + timedelta(days=7), until + timedelta(days=1))) > 0))
+                d += timedelta(days=7)
+    elif by == "weekday":
+        keys = [(i, True) for i in range(7)]
+    elif by == "hour":
+        keys = [(i, True) for i in range(24)]
+    else:
+        keys = None
+
+    def measure_of(rs):
+        spent = sum(r["amount"] for r in rs)
+        n = sum(1 for r in rs if r["_k"] == "purchase")
+        if measure == "count":
+            return n
+        if measure == "average":
+            return round(sum(r["amount"] for r in rs if r["_k"] == "purchase") / n, 2) if n else 0.0
+        return round(spent, 2)
+
+    groups = {}
+    for r in base:
+        groups.setdefault(key(r), []).append(r)
+    labels_of = {"weekday": lambda k: WEEKDAYS[k].capitalize(), "hour": lambda k: "%d %s" % (k % 12 or 12, "am" if k < 12 else "pm"),
+                 "reason": lambda k: dict((a, b) for a, b, _ in INTENTS).get(k, "Could not tell")}
+    if keys is None:                                   # ranked: biggest first, the tail folded into one bar
+        ranked = sorted(groups, key=lambda k: -measure_of(groups[k]))
+        if measure == "average":
+            ranked = sorted(groups, key=lambda k: -sum(r["amount"] for r in groups[k]))     # rank by money; show the average
+        shown, rest = ranked[:top], ranked[top:]
+        keys = [(k, True) for k in shown]
+        if rest:
+            groups["_rest"] = [r for k in rest for r in groups[k]]
+            keys.append(("_rest", True))
+    names = {}
+    if by == "merchant":
+        for r in base:
+            names[r["_m"]] = re.sub(r"\s*#\s*\d+\s*$", "", display_name(r))      # "Safeway #1482" is Safeway on a chart
+
+    def label(k):
+        if k == "_rest":
+            return "Everything else"
+        if by in labels_of:
+            return labels_of[by](k)
+        return names.get(k, k) if by == "merchant" else str(k)
+    stacked = split and by in CHART_TIME and measure != "average"      # averages do not add up, so they never stack
+    if stacked:
+        cats = sorted(set(r["_cat"] for r in base), key=lambda c: -sum(r["amount"] for r in base if r["_cat"] == c))
+        top5 = cats[:5]
+        series = []
+        for c in top5 + (["_rest"] if len(cats) > 5 else []):
+            vals = []
+            for k, covered in keys:
+                rs = [r for r in groups.get(k, []) if (r["_cat"] == c if c != "_rest" else r["_cat"] not in top5)]
+                vals.append(measure_of(rs) if covered else None)
+            series.append({"name": c if c != "_rest" else "Everything else", "values": vals})
+    else:
+        series = [{"name": "All", "values": [measure_of(groups.get(k, [])) if covered else None for k, covered in keys]}]
+    purchases = [r for r in base if r["_k"] == "purchase"]
+    return {"by": by, "measure": measure, "labels": [label(k) for k, _ in keys], "keys": [k if k != "_rest" else None for k, _ in keys],
+            "series": series, "n": len(purchases), "total": round(sum(r["amount"] for r in base), 2), "note": note,
+            "stacked": bool(stacked)}
