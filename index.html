@@ -142,6 +142,15 @@ tr.click { cursor:pointer; } tr.click:hover td { background:var(--ui-inset); }
 .why .eff b { display:block; font-size:17px; color:var(--ui-text); white-space:nowrap; }
 .why .eff.real b { color:var(--s1); }
 .why-none { font-size:13px; color:var(--ui-secondary); padding:10px 0 2px; }
+/* the scale: every signal on one line from "spend less" to "spend more"; how solid a dot is says how much to trust it */
+#whyScale > svg { display:block; width:100%; height:auto; overflow:visible; }
+#whyScale text { font-size:12px; fill:var(--ui-text); paint-order:stroke; stroke:var(--ui-surface); stroke-width:4px; stroke-linejoin:round; }
+#whyScale text.m { fill:var(--ui-secondary); }
+#whyScale text.e { font-size:11px; fill:var(--ui-secondary); }
+.skey { display:flex; flex-wrap:wrap; gap:4px 16px; font-size:12px; color:var(--ui-secondary); margin:4px 0 2px; }
+.skey span { display:inline-flex; align-items:center; gap:6px; }
+.skey svg { width:14px; height:14px; flex:none; }
+.caveat { font-size:12px; color:var(--ui-secondary); margin:2px 0 6px; }
 .early { margin-top:12px; border:1px solid var(--grid); border-radius:8px; padding:4px 12px; }
 .early summary { cursor:pointer; padding:6px 0; font-size:14px; }
 .early .row { display:grid; grid-template-columns:minmax(170px, 36%) 1fr auto; gap:6px 16px; align-items:center; padding:7px 0; font-size:13px; }
@@ -464,6 +473,9 @@ The page runs the real LEDGER server inside your browser; anything you change li
   <section class="card" id="whyCard" data-tab="patterns">
     <h2>Do your bigger-spending days have anything in common?</h2>
     <p class="answer" id="whyAnswer"></p>
+    <p class="sub" id="whySum"></p>
+    <div id="whyScale"></div>
+    <div class="lgroup">The numbers behind each dot</div>
     <div id="why"></div>
     <details class="early" id="whyEarly"><summary id="whyEarlySum"></summary><div id="whyEarlyRows"></div></details>
     <div class="lgroup">What you choose to spend, by weekday</div>
@@ -614,7 +626,7 @@ function showTab(t, keepScroll) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === t));
   if (location.hash.slice(1) !== t) history.replaceState(null, "", location.pathname + location.search + "#" + t);
   if (!keepScroll) scrollTo({ top: 0 });
-  if (D && D.status.rows) requestAnimationFrame(() => { renderPace(); renderTrend(); renderWhere(); });   // drawn while hidden, the charts measured nothing
+  if (D && D.status.rows) requestAnimationFrame(() => { renderPace(); renderTrend(); renderWhere(); renderWhy(); });   // drawn while hidden, the charts measured nothing
 }
 function goTo(t, sel) {
   showTab(t, true);
@@ -1059,6 +1071,61 @@ $("#cutReset").addEventListener("click", async () => {
   renderCut();
 });
 
+/* ---- the scale: every signal as a dot on one line from "spend less" to "spend more". Where it sits = how much more
+   or less you spent on its high days, as a share of an average day. How solid it is = how far to believe it:
+   solid is a real link (enough days, and its range clears zero), hollow could be chance, dashed is too early. */
+function renderWhyScale(an, ds, real) {
+  // solid needs BOTH: a range that clears zero and a "clear" verdict - with ~19 signals tested, one "suggestive" is luck
+  const mean = an.mean_spend || 1, trust = (d) => d.enough === false ? "early" : real(d) && d.verdict === "clear" ? "strong" : "chance";
+  const pts = ds.map((d) => ({ d, v: d.diff / mean * 100, t: trust(d), name: whyShort(d) }));
+  const judged = pts.filter((q) => q.t !== "early"), pc = (v) => (v > 0 ? "+" : "−") + Math.abs(Math.round(v)) + "%";
+  // the summary in words: what is clear, then what only leans one way
+  const strong = judged.filter((q) => q.t === "strong").sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+  const lean = (sign) => judged.filter((q) => q.t === "chance" && Math.sign(q.v) === sign && Math.abs(q.v) >= 5).sort((a, b) => Math.abs(b.v) - Math.abs(a.v)).slice(0, 2);
+  const list = (qs) => qs.map((q) => q.name + " (" + pc(q.v) + ")").join(", ");
+  const parts = [];
+  if (strong.length) parts.push("Clear: " + strong.map((q) => "you spend " + (q.v > 0 ? "more" : "less") + " on days with more " + q.name + " (" + pc(q.v) + ")").join("; ") + ".");
+  const up = lean(1), down = lean(-1);
+  if (up.length || down.length) parts.push((strong.length ? "Only leaning, could be chance - " : "Leaning, but could be chance - ") + [up.length ? "toward more: " + list(up) : "", down.length ? "toward less: " + list(down) : ""].filter(Boolean).join("; ") + ".");
+  $("#whySum").textContent = parts.join(" ") || "Nothing leans either way yet.";
+  // the drawing
+  const W = Math.max(300, Math.round($("#whyScale").clientWidth || 720)), L = 14, R = 14, lim = Math.max(15, ...judged.map((q) => Math.abs(q.v))) * 1.15;
+  const x = (v) => L + (Math.max(-lim, Math.min(lim, v)) / lim + 1) / 2 * (W - L - R);
+  const order = pts.slice().sort((a, b) => x(a.v) - x(b.v)), ends = [];      // label lanes, filled lowest-first so nothing overlaps
+  for (const q of order) {
+    const lab = (q.v < -lim ? "‹ " : "") + q.name + (q.v > lim ? " ›" : ""), w = lab.length * 6.4 + 8;
+    const cx = Math.max(L + w / 2, Math.min(W - R - w / 2, x(q.v)));
+    let lane = ends.findIndex((e) => e + 6 < cx - w / 2); if (lane < 0) { lane = ends.length; ends.push(0); }
+    ends[lane] = cx + w / 2; Object.assign(q, { lab, cx, lane });
+  }
+  const laneH = 17, top = 6, axisY = top + ends.length * laneH + 14, H = axisY + 34;
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Each signal from spend less to spend more: " + pts.map((q) => q.name + " " + pc(q.v) + " (" + q.t + ")").join(", ") });
+  svg.append(s("line", { x1: L, x2: W - R, y1: axisY, y2: axisY, stroke: "var(--ui-border)", "stroke-width": 2 }),
+    s("line", { x1: x(0), x2: x(0), y1: axisY - 7, y2: axisY + 7, stroke: "var(--ui-secondary)", "stroke-width": 2 }),
+    s("text", { x: L, y: H - 4, class: "m" }, "← spend less"), s("text", { x: W - R, y: H - 4, "text-anchor": "end", class: "m" }, "spend more →"),
+    s("text", { x: x(0), y: H - 4, "text-anchor": "middle", class: "m" }, "no difference"));
+  const leaders = s("g"); svg.append(leaders);              // every leader line under every label
+  for (const q of order.slice().sort((a, b) => ({ early: 0, chance: 1, strong: 2 })[a.t] - ({ early: 0, chance: 1, strong: 2 })[b.t])) {     // solid dots drawn last, on top
+    const ly = axisY - 14 - q.lane * laneH, dx = x(q.v), g = s("g", { tabindex: 0 });
+    leaders.append(s("line", { x1: q.cx, x2: dx, y1: ly + 3, y2: axisY - 6, stroke: "var(--ui-border)", "stroke-width": 1 }));
+    g.append(q.t === "strong" ? s("circle", { cx: dx, cy: axisY, r: 7, fill: "var(--s1)", stroke: "var(--ui-surface)", "stroke-width": 2 })
+      : q.t === "chance" ? s("circle", { cx: dx, cy: axisY, r: 5.5, fill: "var(--ui-surface)", stroke: "var(--ui-secondary)", "stroke-width": 1.5 })
+      : s("circle", { cx: dx, cy: axisY, r: 4.5, fill: "none", stroke: "var(--context)", "stroke-width": 1.5, "stroke-dasharray": "2 2" }),
+      s("text", { x: q.cx, y: ly, "text-anchor": "middle", class: q.t === "strong" ? "" : q.t === "chance" ? "m" : "e", style: q.t === "strong" ? "font-weight:600" : "" }, q.lab));
+    const tip = (ev) => showTip(ev, whySay(q.d), [["On those days", pc(q.v) + " vs an average day (" + signed(q.d.diff) + " a day)"],
+      ["How sure", q.t === "strong" ? "a real link - enough days, and beyond chance" : q.t === "chance" ? "could be chance - a neat stat, not a pattern" : "too early - " + (q.d.n_low + q.d.n_high) + " of " + (q.d.enough_days || 60) + " days"]]);
+    g.addEventListener("pointermove", tip); g.addEventListener("focus", tip); g.addEventListener("pointerleave", hideTip); g.addEventListener("blur", hideTip);
+    svg.append(g);
+  }
+  const icon = (c) => { const i = s("svg", { viewBox: "0 0 14 14" }); i.append(c); return i; };
+  put($("#whyScale"), svg,
+    h("div", { class: "skey" },
+      h("span", {}, icon(s("circle", { cx: 7, cy: 7, r: 5.5, fill: "var(--s1)" })), "real link - enough days, beyond chance"),
+      h("span", {}, icon(s("circle", { cx: 7, cy: 7, r: 4.5, fill: "none", stroke: "var(--ui-secondary)", "stroke-width": 1.5 })), "could be chance - a neat stat"),
+      h("span", {}, icon(s("circle", { cx: 7, cy: 7, r: 4, fill: "none", stroke: "var(--context)", "stroke-width": 1.5, "stroke-dasharray": "2 2" })), "too early to tell")),
+    h("p", { class: "caveat", text: "A dot shows how things have lined up so far - it can just appear this way, and it never says one causes the other." }));
+}
+
 /* ---- what goes with it: day-level. Answer first, then each comparison in words with its cutoff, and a
    bar for the likely range of the difference - a range across 0 is "could be chance". Signals with too few
    days behind them are folded away instead of drawn: their huge swings are noise. "Goes with", never "causes". */
@@ -1111,6 +1178,7 @@ function renderWhy() {
     row.addEventListener("pointermove", tipper); row.addEventListener("focus", tipper); row.addEventListener("pointerleave", hideTip); row.addEventListener("blur", hideTip);
     return row;
   });
+  renderWhyScale(an, ds, real);
   put($("#why"), ...rows, flat.length ? h("div", { class: "why-none", text: "No difference (under " + money(tiny) + " a day): " + flat.map(whyShort).join(", ") + "." }) : null);
   $("#whyEarly").hidden = !early.length;
   if (early.length) {
@@ -1392,7 +1460,7 @@ $("#prev").addEventListener("click", () => { const i = D.months.indexOf(D.month)
 $("#next").addEventListener("click", () => { const i = D.months.indexOf(D.month); if (i >= 0 && i < D.months.length - 1) { month = D.months[i + 1]; load(true); } });
 
 let rsT, lastW = innerWidth;
-addEventListener("resize", () => { if (innerWidth === lastW || !D || !D.status.rows) return; lastW = innerWidth; clearTimeout(rsT); rsT = setTimeout(() => { renderPace(); renderTrend(); renderWhere(); }, 150); });
+addEventListener("resize", () => { if (innerWidth === lastW || !D || !D.status.rows) return; lastW = innerWidth; clearTimeout(rsT); rsT = setTimeout(() => { renderPace(); renderTrend(); renderWhere(); renderWhy(); }, 150); });
 
 showTab(TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : store.get("tab", "month"), true);
 load(false);
