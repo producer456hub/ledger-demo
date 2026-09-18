@@ -138,6 +138,7 @@ tr.click { cursor:pointer; } tr.click:hover td { background:var(--ui-inset); }
 .lever .save { text-align:right; font-weight:600; white-space:nowrap; }
 .lever .save.zero { color:var(--ui-secondary); font-weight:400; }
 .switch { display:inline-flex; border:1px solid var(--ui-border); border-radius:8px; overflow:hidden; }
+.switch[hidden] { display:none; }
 .switch button { border:0; background:var(--ui-surface); padding:4px 14px; min-height:36px; cursor:pointer; }
 .switch button[aria-pressed=true] { background:var(--ui-accent); color:var(--ui-surface); }
 @media (max-width:600px) { .lever { grid-template-columns:1fr auto; } .lever .ctl { grid-column:1 / -1; order:3; } }
@@ -547,6 +548,7 @@ The page runs the real LEDGER server inside your browser; anything you change li
   <section class="card" id="whereCard" data-tab="patterns">
     <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
       <h2 style="flex:1">Where you spend</h2>
+      <div class="switch" role="group" aria-label="Map area" id="whereView"><button type="button" data-v="near">Around home</button><button type="button" data-v="region">Region</button><button type="button" data-v="all">Everywhere</button></div>
       <button class="btn quiet" id="mapToggle" aria-pressed="true" title="Street tiles come from OpenStreetMap - the one thing on this page fetched from outside">Map: on</button>
       <button class="btn quiet" id="whereToggle" aria-pressed="false">Show as table</button>
     </div>
@@ -1398,20 +1400,28 @@ function renderWhere() {
   const kmBetween = (a, b) => Math.hypot((a.lon - b.lon) * Math.cos(a.lat * Math.PI / 180) * 111.32, (a.lat - b.lat) * 110.57);
   const hub = P.reduce((best, p) => { const v = P.filter((q) => kmBetween(p, q) <= 30).reduce((a, q) => a + q.visits, 0); return v > best[0] ? [v, p] : best; }, [-1, P[0]])[1];
   const c0 = [hub.lat, hub.lon], km = (p) => kmBetween(hub, p), near = P.filter((p) => km(p) <= 30), far = P.filter((p) => km(p) > 30);
+  // Around home = within 30 km of the hub (the everyday); Region = within 200 km (the city trips); Everywhere = every place,
+  // a long trip included. The street tiles pick their own zoom from whatever has to fit. A level only shows if it adds places.
+  const regional = P.filter((p) => km(p) <= 200), sets = { near, region: regional, all: P };
+  const offered = { near: true, region: regional.length > near.length, all: P.length > regional.length };
+  let view = store.get("whereView", "near"); if (!offered[view]) view = "near";
+  const shown = sets[view];
+  $("#whereView").hidden = !far.length;
+  for (const b of document.querySelectorAll("#whereView button")) { b.hidden = !offered[b.dataset.v]; b.setAttribute("aria-pressed", String(b.dataset.v === view)); }
   // `near` always holds the hub itself (0 km), so the projection below never sees an empty set
   const ch = cov.channels;
   const byS = P.slice().sort((a, b) => b.spent - a.spent), topp = byS.find((q) => !/\(area\)$/.test(q.name)) || byS[0];    // a town-level pin is not a place
   const first = P.reduce((a, p) => p.dates.length && (!a || p.dates[0] < a) ? p.dates[0] : a, null);      // an all-time total read as "this month" is a fright: say since when
   title("#whereCard", "Most spent at " + topp.name.split(",")[0] + " · " + money0(topp.spent) + (first ? " since " + shortMonth(first.slice(0, 7)) + " " + first.slice(0, 4) : ""));
-  setInfo("#whereCard", cov.placed + " of " + (ch.in_person || 0) + " in-person purchases placed, by the merchant's name and the street on the statement, or near where you were. Totals are what you kept: a return comes off the place it went back to. " + ((ch.online || 0) + (ch.billed || 0)) + " online and billed purchases are deliberately not pinned anywhere." + (far.length ? " " + far.length + " place" + (far.length === 1 ? "" : "s") + " farther than 30 km are in the table only." : ""));
+  setInfo("#whereCard", cov.placed + " of " + (ch.in_person || 0) + " in-person purchases placed, by the merchant's name and the street on the statement, or near where you were. Totals are what you kept: a return comes off the place it went back to. " + ((ch.online || 0) + (ch.billed || 0)) + " online and billed purchases are deliberately not pinned anywhere." + (far.length ? " " + far.length + " place" + (far.length === 1 ? " is" : "s are") + " farther than 30 km from home - Region and Everywhere show them." : ""));
   const W = Math.max(300, Math.round($("#whereCard").clientWidth - 34)), H = Math.round(Math.min(520, W * .62)), pad = 30;
   // Web Mercator in zoom-20 pixel space, scaled to fit: the circles then sit on street tiles exactly. At most a few
   // dozen km across, so the projection's own distortion is nil; `sc` stays "pixels per km" for the scale bar.
   const N20 = 268435456, merc = (p) => { const r = p.lat * Math.PI / 180; return [(p.lon + 180) / 360 * N20, (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * N20]; };
-  const M20 = new Map(near.map((p) => [p, merc(p)])), mx = near.map((p) => M20.get(p)[0]), my = near.map((p) => M20.get(p)[1]), pxKm20 = N20 / (40075.017 * Math.cos(c0[0] * Math.PI / 180));
+  const M20 = new Map(shown.map((p) => [p, merc(p)])), mx = shown.map((p) => M20.get(p)[0]), my = shown.map((p) => M20.get(p)[1]), pxKm20 = N20 / (40075.017 * Math.cos(c0[0] * Math.PI / 180));
   const span20 = Math.max(2 * pxKm20, Math.max(...mx) - Math.min(...mx), (Math.max(...my) - Math.min(...my)) * W / H);
   const k = (W - 2 * pad) / span20, cx = (Math.max(...mx) + Math.min(...mx)) / 2, cy = (Math.max(...my) + Math.min(...my)) / 2, sc = k * pxKm20;
-  const X = (p) => W / 2 + (M20.get(p)[0] - cx) * k, Y = (p) => H / 2 + (M20.get(p)[1] - cy) * k, big = Math.max(...near.map((p) => p.spent)), R = (p) => Math.max(4, Math.sqrt(p.spent / big) * 30);
+  const X = (p) => W / 2 + (M20.get(p)[0] - cx) * k, Y = (p) => H / 2 + (M20.get(p)[1] - cy) * k, big = Math.max(...shown.map((p) => p.spent)), R = (p) => Math.max(4, Math.sqrt(p.spent / big) * 30);
   const svg = s("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Places where money was spent" });
   svg.append(s("rect", { x: 0, y: 0, width: W, height: H, rx: 8, fill: "var(--ui-inset)" }));
   const mapOn = BASEMAP && store.get("basemap", true);
@@ -1431,25 +1441,30 @@ function renderWhere() {
     svg.append(_tiles.g, s("text", { x: W - 6, y: H - 6, "text-anchor": "end", style: "font-size:10px" }, "© OpenStreetMap contributors"));
   }
   const boxes = [];
-  near.slice().sort((a, b) => b.spent - a.spent).forEach((p, i) => {
+  shown.slice().sort((a, b) => b.spent - a.spent).forEach((p, i) => {
     const g = s("g", { tabindex: 0, "aria-label": p.name + " " + money(p.spent) });
     g.append(s("circle", { cx: X(p), cy: Y(p), r: R(p), fill: "var(--s1)", "fill-opacity": .55, stroke: "var(--ui-inset)", "stroke-width": 2 }), s("circle", { cx: X(p), cy: Y(p), r: Math.max(12, R(p)), fill: "transparent" }));
     const tipper = (ev) => { showTip(ev, p.name, [["Spent", money(p.spent)], ["Purchases", String(p.visits)], ["Share of placed spend", (p.spent / tot * 100).toFixed(0) + "%"]].concat(p.merchants.length > 1 ? [["Also here", p.merchants.slice(1).join(", ").slice(0, 60)]] : [])); };
     g.addEventListener("pointermove", tipper); g.addEventListener("focus", tipper); g.addEventListener("pointerleave", hideTip); g.addEventListener("blur", hideTip);
     g.addEventListener("click", () => { $("#q").value = p.merchants[0]; $("#fRange").value = "all"; $("#fCat").value = ""; loadTx(true); showTx(); });
     svg.append(g);
-    if (i < 9) {      // label the biggest few, and only where the text will not sit on another label
-      const t = p.name.split(",")[0].slice(0, 22), w = t.length * 6.2 + 8, bx = Math.min(W - w - 4, X(p) + R(p) + 4), by = Y(p) - 7;
-      if (!boxes.some((b) => bx < b[0] + b[2] && bx + w > b[0] && by < b[1] + 16 && by + 16 > b[1])) { boxes.push([bx, by, w]); svg.append(s("text", { x: bx, y: Y(p) + 4, class: "strong" }, t)); }
-    }
   });
-  const barKm = [1, 2, 5, 10, 20].find((k) => k * sc >= 60) || 20;
+  // labels after every dot, so none hides under a later circle. Around home: the biggest few. Zoomed out, the towns
+  // come first ("San Francisco (area)" reads as San Francisco) - that is what a map of trips should say.
+  const isArea = (p) => /\(area\)$/.test(p.name), bySpend = (a, b) => b.spent - a.spent;
+  const labelOrder = view === "near" ? shown.slice().sort(bySpend) : shown.filter(isArea).sort(bySpend).concat(shown.filter((p) => !isArea(p)).sort(bySpend));
+  labelOrder.slice(0, view === "near" ? 9 : 12).forEach((p) => {       // only where the text will not sit on another label
+    const t = p.name.split(",")[0].replace(/ \(area\)$/, "").slice(0, 22), w = t.length * 6.2 + 8, bx = Math.min(W - w - 4, X(p) + R(p) + 4), by = Y(p) - 7;
+    if (!boxes.some((b) => bx < b[0] + b[2] && bx + w > b[0] && by < b[1] + 16 && by + 16 > b[1])) { boxes.push([bx, by, w]); svg.append(s("text", { x: bx, y: Y(p) + 4, class: "strong" }, t)); }
+  });
+  const barKm = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000].find((k) => k * sc >= 60) || 2000;
   svg.append(s("line", { x1: 14, x2: 14 + barKm * sc, y1: H - 14, y2: H - 14, stroke: "var(--ui-secondary)", "stroke-width": 2 }), s("text", { x: 14, y: H - 20 }, barKm + " km"), s("text", { x: W - 14, y: 18, "text-anchor": "end" }, "north ↑"));
   put($("#whereMap"), svg);
   put($("#whereTable"), h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Place" }), h("th", { text: "When" }), h("th", { class: "r", text: "Purchases" }), h("th", { class: "r", text: "Spent" }), h("th", { class: "r", text: "From the centre" }))),
     h("tbody", {}, ...P.map((p) => h("tr", {}, h("td", {}, h("div", { text: p.name }), p.merchants.length > 1 ? h("div", { class: "muted", style: "font-size:13px", text: p.merchants.join(", ") }) : null, p.visits > 1 && p.mean != null ? h("div", { class: "muted num", style: "font-size:13px", text: "smallest " + money(p.smallest) + " · mean " + money(p.mean) + " · largest " + money(p.largest) }) : null), h("td", { class: "num", text: p.days ? dayYear(p.dates[0]) + " – " + dayYear(p.dates[1]) : whenLabel(p.dates) }), h("td", { class: "r num", text: String(p.visits) }), h("td", { class: "r num", text: money(p.spent) }), h("td", { class: "r num muted", text: km(p).toFixed(1) + " km" })))))));
 }
 $("#mapToggle").addEventListener("click", () => { store.set("basemap", !store.get("basemap", true)); renderWhere(); });
+for (const b of document.querySelectorAll("#whereView button")) b.addEventListener("click", () => { store.set("whereView", b.dataset.v); renderWhere(); });
 $("#whereToggle").addEventListener("click", (e) => { const on = e.target.getAttribute("aria-pressed") !== "true"; e.target.setAttribute("aria-pressed", on); e.target.textContent = on ? "Show as map" : "Show as table"; $("#whereMap").hidden = on; $("#whereTable").hidden = !on; });
 
 /* ---- habits: places he chooses again and again. The weekday strip is one series, one hue: magnitude only. */
