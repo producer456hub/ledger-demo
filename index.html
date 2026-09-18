@@ -1,0 +1,1186 @@
+<!doctype html>
+<html lang="en" data-system-ui="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ledger demo</title>
+<style>
+/* LEDGER surface. Chrome wears the fleet's shared-ui roles (--ui-*, injected by
+   deck-shell/shared-ui/build.py); only the chart series colours are local, and
+   both sets were run through the dataviz validator against these surfaces
+   (#FFFFFF light, #21262C dark): all gates pass. Three light-mode series sit
+   under 3:1 on white, so every chart ships direct labels and a table view. */
+:root {
+  --ui-background:#F5F6F7; --ui-surface:#FFFFFF; --ui-inset:#ECEFF2; --ui-text:#20262D;
+  --ui-secondary:#56616D; --ui-border:#CCD2D9; --ui-accent:#245FC2;
+  --ui-success:#267047; --ui-warning:#885A09; --ui-danger:#B6333F;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --other:#a3abb5;
+  --context:#9aa3ad; --grid:#ECEFF2; --st-warn:#fab219; --st-crit:#d03b3b;
+}
+:root[data-ui-mode="dark"] {
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --other:#5d6874;
+  --context:#6d7883; --grid:#2C333B;
+}
+* { box-sizing:border-box; }
+html, body { margin:0; }
+body { background:var(--ui-background); color:var(--ui-text);
+  font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  padding:0 0 calc(24px + env(safe-area-inset-bottom)); }
+button, input, select { font:inherit; color:inherit; }
+.strip { position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:10px 16px; background:var(--ui-background); border-bottom:1px solid var(--ui-border); }
+.strip h1 { font-size:15px; font-weight:600; margin:0; }
+.stale { font-size:13px; color:var(--ui-secondary); }
+.stale.old { color:var(--ui-warning); font-weight:600; }
+.filters { display:flex; align-items:center; gap:6px; margin-left:auto; }
+.filters button, .filters select, .btn { border:1px solid var(--ui-border); background:var(--ui-surface);
+  border-radius:8px; padding:4px 12px; min-height:36px; cursor:pointer; }
+.btn.quiet { background:transparent; color:var(--ui-accent); }
+main { max-width:1180px; margin:0 auto; padding:16px; display:grid; gap:16px;
+  grid-template-columns:repeat(12, minmax(0, 1fr)); }
+.card { grid-column:span 12; background:var(--ui-surface); border:1px solid var(--ui-border);
+  border-radius:8px; padding:16px; min-width:0; }
+.half { grid-column:span 6; } .third { grid-column:span 4; } .twothird { grid-column:span 8; }
+h2 { font-size:15px; font-weight:600; margin:0 0 2px; }
+.sub { font-size:13px; color:var(--ui-secondary); margin:0 0 12px; }
+.scope { grid-column:span 12; font-size:13px; color:var(--ui-secondary); margin:8px 0 -6px; font-weight:600; }
+.num { font-variant-numeric:tabular-nums; }
+
+/* figures */
+.hero { display:flex; flex-wrap:wrap; gap:24px 40px; align-items:flex-end; }
+.hero .big { font-size:52px; line-height:1.05; font-weight:600; letter-spacing:-.01em; }
+.hero .lbl, .tile .lbl { font-size:13px; color:var(--ui-secondary); }
+.tiles { display:flex; flex-wrap:wrap; gap:16px 32px; }
+.tile .val { font-size:22px; font-weight:600; }
+.delta.up { color:var(--ui-danger); } .delta.down { color:var(--ui-success); }
+
+/* charts */
+svg { display:block; width:100%; height:auto; overflow:visible; }
+svg text { fill:var(--ui-secondary); font-size:11px; font-family:inherit; }
+svg text.strong { fill:var(--ui-text); font-weight:600; }
+.legend { display:flex; flex-wrap:wrap; gap:4px 16px; font-size:13px; color:var(--ui-secondary); margin:0 0 8px; }
+.legend span { display:inline-flex; align-items:center; gap:6px; }
+.key { width:14px; height:2px; border-radius:1px; display:inline-block; }
+.key.box { height:10px; width:10px; border-radius:2px; }
+.bars { display:grid; gap:8px; }
+.bar { display:grid; grid-template-columns:minmax(90px, 30%) 1fr auto; gap:10px; align-items:center;
+  background:none; border:0; padding:2px 0; text-align:left; cursor:pointer; min-height:0 !important; width:100%; }
+.bar .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bar .track { position:relative; height:14px; }
+.bar .fill { position:absolute; left:0; top:0; bottom:0; background:var(--s1); border-radius:0 4px 4px 0; min-width:2px; }
+.bar:hover .fill, .bar:focus-visible .fill { filter:brightness(1.12); }
+.bar .tick { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--ui-text); }
+.bar .val { font-size:13px; }
+.meter { display:grid; grid-template-columns:minmax(90px, 30%) 1fr auto; gap:10px; align-items:center; margin:6px 0; }
+.meter .track { position:relative; height:10px; border-radius:5px; background:color-mix(in srgb, var(--s1) 22%, var(--ui-surface)); overflow:hidden; }
+.meter .fill { position:absolute; inset:0 auto 0 0; background:var(--s1); }
+.meter.ahead .track { background:color-mix(in srgb, var(--st-warn) 24%, var(--ui-surface)); } .meter.ahead .fill { background:var(--st-warn); }
+.meter.over .track { background:color-mix(in srgb, var(--st-crit) 24%, var(--ui-surface)); } .meter.over .fill { background:var(--st-crit); }
+.meter .mark { position:absolute; top:0; bottom:0; width:2px; background:var(--ui-text); }
+
+/* lists and tables */
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th { text-align:left; font-weight:500; font-size:12px; color:var(--ui-secondary); padding:4px 8px 6px 0; border-bottom:1px solid var(--ui-border); }
+td { padding:7px 14px 7px 0; border-bottom:1px solid var(--grid); vertical-align:top; }
+th { padding-right:14px; }
+td.r, th.r { text-align:right; }
+td:last-child, th:last-child { padding-right:0; }
+tr.click { cursor:pointer; } tr.click:hover td { background:var(--ui-inset); }
+.chip { display:inline-block; font-size:12px; font-weight:500; border-radius:6px; padding:1px 7px; border:1px solid var(--ui-border);
+  color:var(--ui-secondary); background:var(--ui-inset); white-space:nowrap; }
+.chip.warn { color:var(--ui-warning); border-color:currentColor; background:transparent; }
+.chip.bad { color:var(--ui-danger); border-color:currentColor; background:transparent; }
+.chip.good { color:var(--ui-success); border-color:currentColor; background:transparent; }
+.muted { color:var(--ui-secondary); }
+.row { display:flex; gap:10px; align-items:baseline; padding:8px 0; border-bottom:1px solid var(--grid); flex-wrap:wrap; }
+.row:last-child { border-bottom:0; }
+.row .grow { flex:1 1 200px; min-width:0; }
+.row .amt { font-weight:600; }
+.tools { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 10px; }
+.tools input[type=search] { flex:1 1 200px; border:1px solid var(--ui-border); border-radius:8px; padding:4px 12px; min-height:36px; background:var(--ui-surface); font-size:16px; }
+.tools select { border:1px solid var(--ui-border); border-radius:8px; padding:4px 8px; min-height:36px; background:var(--ui-surface); }
+.edit { display:grid; gap:8px; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); padding:8px 0 4px; }
+.edit label { display:grid; gap:2px; font-size:12px; color:var(--ui-secondary); }
+.edit input, .edit select { border:1px solid var(--ui-border); border-radius:8px; padding:4px 10px; min-height:36px; background:var(--ui-surface); font-size:16px; color:var(--ui-text); }
+.empty { color:var(--ui-secondary); font-size:14px; padding:6px 0; }
+/* cut spending */
+.cuthead { display:flex; flex-wrap:wrap; gap:16px 40px; align-items:flex-end; margin:4px 0 14px; }
+.cuthead .big2 { font-size:34px; font-weight:600; line-height:1.1; }
+.ideas { display:grid; gap:6px; margin:0 0 14px; }
+.idea { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:8px 10px; background:var(--ui-inset); border-radius:8px; }
+.idea .grow { flex:1 1 220px; }
+.lgroup { font-size:13px; font-weight:600; color:var(--ui-secondary); margin:14px 0 2px; }
+.lever { display:grid; grid-template-columns:minmax(120px, 26%) 1fr minmax(150px, auto); gap:6px 16px; align-items:center; padding:9px 0; border-bottom:1px solid var(--grid); }
+.lever:last-child { border-bottom:0; }
+.lever input[type=range] { width:100%; accent-color:var(--ui-accent); min-height:28px !important; }
+.lever .say { font-size:13px; color:var(--ui-secondary); }
+.lever .save { text-align:right; font-weight:600; white-space:nowrap; }
+.lever .save.zero { color:var(--ui-secondary); font-weight:400; }
+.switch { display:inline-flex; border:1px solid var(--ui-border); border-radius:8px; overflow:hidden; }
+.switch button { border:0; background:var(--ui-surface); padding:4px 14px; min-height:36px; cursor:pointer; }
+.switch button[aria-pressed=true] { background:var(--ui-accent); color:var(--ui-surface); }
+@media (max-width:600px) { .lever { grid-template-columns:1fr auto; } .lever .ctl { grid-column:1 / -1; order:3; } }
+/* when and where: one hue, light to dark = more. Steps are SELECTED per mode, not flipped */
+:root { --q0:var(--ui-inset); --q1:#cde2fb; --q2:#9ec5f4; --q3:#6da7ec; --q4:#3987e5; --q5:#1c5cab; }
+:root[data-ui-mode="dark"] { --q1:#104281; --q2:#184f95; --q3:#256abf; --q4:#3987e5; --q5:#86b6ef; }
+.why { display:grid; grid-template-columns:minmax(150px, 30%) 1fr auto; gap:4px 14px; align-items:center; padding:9px 0; border-bottom:1px solid var(--grid); }
+.why:last-child { border-bottom:0; }
+.why .pair { display:grid; gap:3px; }
+.why .pb { display:grid; grid-template-columns:1fr 64px; gap:8px; align-items:center; font-size:12px; }
+.why .pb i { display:block; height:8px; border-radius:0 4px 4px 0; min-width:2px; }
+@media (max-width:600px) { .why { grid-template-columns:1fr auto; } .why .pair { grid-column:1 / -1; order:3; } }
+.heat { display:grid; grid-template-columns:34px repeat(24, minmax(0, 1fr)); gap:2px; font-size:11px; color:var(--ui-secondary); align-items:center; }
+.heat .c { aspect-ratio:1 / 1; border-radius:3px; background:var(--q0); min-height:0 !important; border:0; padding:0; }
+.heat .c:hover, .heat .c:focus-visible { outline:2px solid var(--ui-text); outline-offset:1px; }
+.heat .hh { text-align:center; }
+.scale { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ui-secondary); margin-top:8px; }
+.scale i { width:22px; height:10px; border-radius:2px; display:inline-block; }
+.setup ol { margin:8px 0 0; padding-left:20px; } .setup li { margin:2px 0; }
+
+#tip { position:fixed; z-index:50; pointer-events:none; background:var(--ui-text); color:var(--ui-background);
+  border-radius:8px; padding:8px 10px; font-size:13px; max-width:280px; box-shadow:0 8px 24px #0003; }
+#tip .t { opacity:.75; margin-bottom:4px; }
+#tip .l { display:flex; gap:8px; align-items:center; justify-content:space-between; }
+#tip .l b { font-weight:600; } #tip .l span { display:inline-flex; gap:6px; align-items:center; opacity:.85; }
+#toast { position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom)); transform:translateX(-50%);
+  background:var(--ui-text); color:var(--ui-background); padding:8px 14px; border-radius:8px; font-size:14px; opacity:0; transition:opacity .2s; z-index:60; }
+#toast.show { opacity:1; }
+.dim { opacity:.55; transition:opacity .15s; }
+
+@media (max-width:900px) { .half, .third, .twothird { grid-column:span 12; } }
+@media (max-width:440px) { main { padding:10px; gap:10px; } .card { padding:12px; } .hero .big { font-size:40px; }
+  .bar, .meter { grid-template-columns:minmax(70px, 34%) 1fr auto; } }
+</style>
+<!-- shared-ui:start -->
+<style data-shared-ui="1.0.0-89b7b033efb5">
+:root{--ui-background:#F5F6F7;--ui-surface:#FFFFFF;--ui-inset:#ECEFF2;--ui-text:#20262D;--ui-secondary:#56616D;--ui-border:#CCD2D9;--ui-accent:#245FC2;--ui-success:#267047;--ui-warning:#885A09;--ui-danger:#B6333F;}
+:root[data-ui-mode="dark"]{--ui-background:#171A1E;--ui-surface:#21262C;--ui-inset:#2C333B;--ui-text:#EDF0F3;--ui-secondary:#B0BAC5;--ui-border:#48535F;--ui-accent:#96BAFF;--ui-success:#86CBA1;--ui-warning:#E5BE76;--ui-danger:#FFA0A9;}
+/* Shared UI v1. Function determines layout; semantic roles determine color. */
+html[data-system-ui] { background:var(--ui-background); color-scheme:light; }
+html[data-system-ui][data-ui-mode="dark"] { color-scheme:dark; }
+html[data-system-ui] body[data-ui-app] {
+  background:var(--ui-background);color:var(--ui-text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  font-size:15px;line-height:1.5;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Consolas,monospace;
+  --bg:var(--ui-background);--ground:var(--ui-background);--bone:var(--ui-background);
+  --white:var(--ui-surface);--panel:var(--ui-surface);--card:var(--ui-surface);--bone-2:var(--ui-surface);
+  --panel2:var(--ui-inset);--card2:var(--ui-inset);--inlay:var(--ui-inset);--inlay2:var(--ui-inset);--bone-3:var(--ui-inset);
+  --text:var(--ui-text);--txt:var(--ui-text);--ink:var(--ui-text);
+  --dim:var(--ui-secondary);--mut:var(--ui-secondary);--muted:var(--ui-secondary);--faint:var(--ui-secondary);--mute:var(--ui-secondary);--ink2:var(--ui-secondary);--ink-soft:var(--ui-secondary);--label:var(--ui-secondary);
+  --line:var(--ui-border);--brd:var(--ui-border);--seam:var(--ui-border);--seamdk:var(--ui-border);
+  --accent:var(--ui-accent);--acc:var(--ui-accent);--orange:var(--ui-accent);
+  --ok:var(--ui-success);--up:var(--ui-success);--good:var(--ui-success);--green:var(--ui-success);--accent2:var(--ui-success);
+  --warn:var(--ui-warning);--caution:var(--ui-warning);--bad:var(--ui-danger);--down:var(--ui-danger);--red:var(--ui-danger);--red-deep:var(--ui-danger);
+  --pink:var(--ui-secondary);--violet:var(--ui-secondary);
+  --module:var(--ui-surface);--module2:var(--ui-inset);--charcoal:var(--ui-surface);--charcoal-2:var(--ui-inset);--charcoal-seam:var(--ui-border);
+  --gink:var(--ui-text);--gmute:var(--ui-secondary);--mod-ink:var(--ui-text);--mod-ink-soft:var(--ui-secondary);
+  --pocket:transparent;--pocket2:transparent;--lit:transparent;--inset-hi:transparent;--drop:transparent;
+}
+html[data-system-ui] :is(button,input,select,textarea,summary) {font-family:inherit;}
+html[data-system-ui] :is(button,select,input:not([type="checkbox"]):not([type="radio"]),summary) {min-height:36px;}
+html[data-system-ui] :is(button,summary) {touch-action:manipulation;}
+html[data-system-ui] :is(button,a,input,select,textarea,summary):focus-visible {outline:3px solid var(--ui-accent)!important;outline-offset:3px;}
+html[data-system-ui] :is(button,input,select,textarea):disabled {opacity:.55;cursor:default;}
+html[data-system-ui] :is(h1,h2,h3,.mark,.brand,.seg,.chip,.k,.lbl,.tbtn,.push,.mode) {text-transform:none!important;letter-spacing:normal!important;}
+html[data-system-ui] :is(h2,.sec) {font-size:15px;font-weight:600;}
+html[data-system-ui] :is(.card,.mach,.panel,.tile,.pocket,.asm,.hero,.glass) {border-radius:8px;box-shadow:none;}
+html[data-system-ui] :is(.stamp,.tbtn,.btn,.push,.ask) {border-radius:8px;font-size:14px;box-shadow:none;}
+html[data-system-ui] :is(.stamp,.ask) {min-width:36px;}
+html[data-system-ui] :is(.led,.chip,.seg,.lamp,.dot) {box-shadow:none!important;}
+html[data-system-ui] .chip {font-size:12px;font-weight:500;border-radius:6px;padding:2px 7px;}
+html[data-system-ui] .chip.neutral {color:var(--ui-secondary);border-color:var(--ui-border);background:var(--ui-inset);}
+html[data-system-ui] .ui-apps {position:relative;flex:none;margin-left:auto;font-size:14px;z-index:40;color:var(--ui-text);}
+html[data-system-ui] .ui-apps summary {display:flex;align-items:center;gap:8px;padding:4px 12px;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-surface);cursor:pointer;list-style:none;}
+html[data-system-ui] .ui-apps summary::-webkit-details-marker {display:none;}
+html[data-system-ui] .ui-apps summary::after {content:"⌄";}
+html[data-system-ui] .ui-apps nav {position:absolute;right:0;top:calc(100% + 6px);display:grid;min-width:180px;max-width:calc(100vw - 32px);padding:6px;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-surface);box-shadow:0 8px 24px #0002;}
+html[data-system-ui] .ui-apps a {display:flex;align-items:center;min-height:40px;padding:6px 12px;border-radius:4px;color:var(--ui-text);text-decoration:none;}
+html[data-system-ui] .ui-apps a:is(:hover,[aria-current="page"]) {background:var(--ui-inset);color:var(--ui-accent);}
+html[data-system-ui] #shader-plastic,html[data-system-ui] #shader-grade {display:none;}
+html[data-system-ui] body[data-ui-app="ops"] :is(header,.card .h,.card .b) {box-shadow:none;background:var(--ui-surface);}
+html[data-system-ui] body[data-ui-app="ops"] nav button {font:inherit;letter-spacing:normal;text-transform:none;border-radius:6px;}
+html[data-system-ui] body[data-ui-app="ops"] nav button.here {color:var(--ui-accent);background:var(--ui-inset);border-color:var(--ui-accent);}
+html[data-system-ui] body[data-ui-app="ops"] .brand .u {color:inherit;}
+html[data-system-ui] body[data-ui-app="docket"] :is(.qa input,.filter,.tok input,.tray-act input) {font-size:16px;border-radius:8px;}
+html[data-system-ui] body[data-ui-app="docket"] :is(.qa button,.tok button) {background:var(--ui-inset);color:var(--ui-accent);border-radius:8px;text-transform:none;letter-spacing:normal;font-size:14px;}
+html[data-system-ui] body[data-ui-app="docket"] .seg.on .bar {background:var(--ui-accent);box-shadow:none;}
+html[data-system-ui] body[data-ui-app="docket"] .seg.on {color:var(--ui-accent);}
+html[data-system-ui] body[data-ui-app="docket"] .row {grid-template-columns:36px minmax(0,1fr) auto;}
+html[data-system-ui] body[data-ui-app="docket"] .qa {flex-wrap:wrap;}
+html[data-system-ui] body[data-ui-app="docket"] .qa input {min-width:140px;}
+html[data-system-ui] body[data-ui-app="system"] .grid {grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));}
+html[data-system-ui] body[data-ui-app="deck"] {--aubergine:var(--ui-background);--aubergine-2:var(--ui-surface);--warm-grey:var(--ui-secondary);}
+html[data-system-ui] body[data-ui-app="deck"] :is(#device,#screen,#selector,#indicators,#more,#panel,#cmdline,.appframe.localpane) {background:var(--ui-background)!important;color:var(--ui-text)!important;box-shadow:none!important;border-color:var(--ui-border)!important;}
+html[data-system-ui] body[data-ui-app="deck"] #indicators {height:44px;border-bottom:1px solid var(--ui-border);}
+html[data-system-ui] body[data-ui-app="deck"] #selector {border-top:1px solid var(--ui-border);padding:8px 12px calc(8px + env(safe-area-inset-bottom));gap:6px;}
+html[data-system-ui] body[data-ui-app="deck"] :is(.sel-row,.seg) {background:var(--ui-surface)!important;color:var(--ui-secondary)!important;border:0!important;box-shadow:none!important;border-radius:6px;}
+html[data-system-ui] body[data-ui-app="deck"] .sel-row {gap:4px;background:transparent!important;overflow:visible;}
+html[data-system-ui] body[data-ui-app="deck"] .seg {min-height:40px;padding:8px 6px;}
+html[data-system-ui] body[data-ui-app="deck"] .seg span {font-family:inherit;font-size:13px;letter-spacing:normal;text-transform:none;font-weight:500;}
+html[data-system-ui] body[data-ui-app="deck"] .seg.on {background:var(--ui-inset)!important;color:var(--ui-accent)!important;}
+html[data-system-ui] body[data-ui-app="deck"] .seg .bar {display:none;}
+html[data-system-ui] body[data-ui-app="deck"] #cmd {background:var(--ui-surface)!important;color:var(--ui-text)!important;border:1px solid var(--ui-border)!important;border-radius:8px;font:inherit;}
+html[data-system-ui] body[data-ui-app="deck"] #wordmark {font:600 15px/1.5 var(--sans);letter-spacing:normal;}
+html[data-system-ui] body[data-ui-app="deck"] #toast {background:var(--ui-text)!important;color:var(--ui-background)!important;border:0!important;border-radius:8px;}
+@media(pointer:coarse),(max-width:600px) {
+ html[data-system-ui] :is(button,summary,select,input:not([type="checkbox"]):not([type="radio"]),.ui-apps a) {min-height:44px!important;}
+ html[data-system-ui] :is(.stamp,.ask) {min-width:44px;}
+ html[data-system-ui] body[data-ui-app="deck"] .seg span {font-size:12px;}
+ html[data-system-ui] body[data-ui-app="docket"] .row {grid-template-columns:36px minmax(0,1fr);}
+ html[data-system-ui] body[data-ui-app="docket"] .acts {grid-column:2;justify-content:flex-end;flex-wrap:wrap;}
+}
+@media(prefers-reduced-motion:reduce) {
+ html[data-system-ui] *,html[data-system-ui] *::before,html[data-system-ui] *::after {animation:none!important;transition:none!important;scroll-behavior:auto!important;}
+}
+html[data-system-ui] body[data-ui-app="docket"] .cb {width:36px;border-radius:8px;}
+@media(pointer:coarse),(max-width:600px) {
+ html[data-system-ui] body[data-ui-app="docket"] .row {grid-template-columns:44px minmax(0,1fr);}
+ html[data-system-ui] body[data-ui-app="docket"] :is(.cb,.more) {width:44px;}
+}
+html[data-system-ui] body[data-ui-app="ops"] h2.sec {color:var(--ui-text);border-color:var(--ui-border);font-family:var(--sans);}
+html[data-system-ui] body[data-ui-app="ops"] :is(.card .h,.card .b,.row .k,.row .v) {font-family:var(--sans);letter-spacing:normal;text-transform:none;}
+
+</style>
+<!-- shared-ui:end -->
+<link rel="icon" href="data:,">
+<meta name="description" content="LEDGER, a personal spending instrument - public demo on invented data, running the real engine in your browser.">
+<style>
+.demo-bar{margin:0 0 12px;padding:9px 12px;border-radius:10px;background:var(--ui-inset);color:var(--ui-text);font-size:13px;line-height:1.45}
+.demo-bar b{margin-right:6px}
+.demo-bar a{color:var(--ui-accent)}
+.demo-bar #demoStatus{display:block;margin-top:2px;color:var(--ui-muted,inherit)}
+html[data-demo-engine="starting"] .demo-bar #demoStatus::before{content:"";display:inline-block;width:9px;height:9px;margin-right:6px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:demospin .8s linear infinite;vertical-align:-1px}
+@keyframes demospin{to{transform:rotate(360deg)}}
+</style>
+<script>
+/* LEDGER demo: the page's own fetch("/api/...") calls never leave the tab. They go to the real server.py,
+   running under Pyodide, against a database of invented transactions loaded into memory. Nothing is sent
+   anywhere; the only network traffic is fetching Pyodide from its CDN and the engine files beside this page. */
+(() => {
+  const BASE = new URL(".", location.href);
+  const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/";
+  const FILES = ["server.py", "ledger_core.py", "motive.py", "demo_app.py", "demo_meta.json"];
+  const status = (t) => {
+    const el = document.getElementById("demoStatus");
+    if (el) el.textContent = t;
+    document.documentElement.dataset.demoEngine = t ? "starting" : "ready";
+  };
+  let ready = null;
+  function boot() {
+    if (ready) return ready;
+    ready = (async () => {
+      status("Starting the engine (a few seconds the first time)…");
+      await new Promise((res, rej) => {
+        const s = document.createElement("script");
+        s.src = PYODIDE + "pyodide.js"; s.onload = res; s.onerror = () => rej(new Error("could not load Pyodide"));
+        document.head.append(s);
+      });
+      const py = await loadPyodide({ indexURL: PYODIDE });
+      status("Loading sqlite…");
+      await py.loadPackage("sqlite3");
+      status("Loading LEDGER…");
+      py.FS.mkdirTree("/demo");
+      for (const f of FILES) {
+        const r = await fetch(new URL("engine/" + f, BASE), { cache: "no-store" });
+        if (!r.ok) throw new Error("missing engine/" + f);
+        py.FS.writeFile("/demo/" + f, await r.text());
+      }
+      const db = await fetch(new URL("engine/ledger.db", BASE), { cache: "no-store" });
+      if (!db.ok) throw new Error("missing engine/ledger.db");
+      py.FS.writeFile("/demo/ledger.db", new Uint8Array(await db.arrayBuffer()));
+      await py.runPythonAsync("import sys\nsys.path.insert(0, '/demo')\nimport demo_app");
+      const mod = py.pyimport("demo_app");
+      status("");
+      return (method, target, body) => {
+        const r = mod.dispatch(method, target, body ?? null);
+        const o = r.toJs({ dict_converter: Object.fromEntries });
+        r.destroy();
+        return o;
+      };
+    })();
+    ready.catch((e) => status("The engine could not start: " + e.message));
+    return ready;
+  }
+  const json = (obj, status) => new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json; charset=utf-8" } });
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : (input instanceof Request ? input.url : String(input));   // Pyodide passes URL objects
+    if (!url.startsWith("/api/")) return realFetch(input, init);
+    const method = (init && init.method) || "GET";
+    const body = init && init.body != null ? String(init.body) : null;
+    if (method === "POST" && url === "/api/ledger/nudges/settings" && body && JSON.parse(body).kind === "_test") {
+      if (typeof toast === "function") toast("The demo has no phone to text");
+      return json({ ok: true }, 200);
+    }
+    let dispatch;
+    try { dispatch = await boot(); } catch (e) { return json({ error: "the demo engine could not start (" + e.message + ")" }, 503); }
+    let d;
+    try { d = dispatch(method, url, body); } catch (e) { return json({ error: "demo engine: " + e.message }, 500); }
+    return new Response(d.body, { status: d.status, headers: { "Content-Type": d.type } });
+  };
+  if (document.readyState === "loading") addEventListener("DOMContentLoaded", boot); else boot();
+})();
+</script>
+</head>
+<body data-ui-app="ledger">
+<header class="strip">
+  <h1>Ledger</h1>
+  <span id="stale" class="stale">Loading…</span>
+  <div class="filters" role="group" aria-label="Month">
+    <button id="prev" aria-label="Previous month">‹</button>
+    <select id="month" aria-label="Month"></select>
+    <button id="next" aria-label="Next month">›</button>
+  </div>
+</header>
+
+<main id="main">
+<div class="demo-bar" role="note"><b>Demo.</b>Every transaction here is invented - a year of made-up purchases in a made-up town.
+The page runs the real LEDGER server inside your browser; anything you change lives in this tab only.
+<a href="https://github.com/producer456hub/ledger-demo#readme">About</a><span id="demoStatus"></span></div>
+
+  <section class="card setup" id="setup" hidden></section>
+
+  <section class="card" id="heroCard">
+    <div class="hero">
+      <div><div class="lbl" id="heroLbl">Spent this month</div><div class="big" id="heroVal">–</div></div>
+      <div class="tiles" id="tiles"></div>
+    </div>
+  </section>
+
+  <section class="card" id="askCard">
+    <h2>Ask</h2><p class="sub">In the real thing a local language model does the words and LEDGER does the arithmetic. The demo has no model: your question goes straight to LEDGER's own calculators, so every figure still comes out of the numbers on this page.</p>
+    <form class="tools" id="askForm" style="margin-bottom:6px">
+      <input id="askQ" type="search" placeholder="What if I stopped going out for coffee?" aria-label="Question" autocomplete="off">
+      <button class="btn" id="askGo" type="submit">Ask</button>
+    </form>
+    <div id="askEg" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+    <div id="askA"></div>
+  </section>
+
+  <section class="card" id="cutCard">
+    <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
+      <h2 style="flex:1">Cut spending</h2>
+      <button class="btn quiet" id="cutReset" hidden>Clear my plan</button>
+    </div>
+    <p class="sub">Your own numbers, three kinds of lever. Bills you cannot simply decide away (dental, insurance, tuition, pharmacy) are left out, and no dollar is offered twice. Move anything - the plan adds itself up and is remembered.</p>
+    <div class="cuthead" id="cutHead"></div>
+    <div id="cutIdeas"></div>
+    <div id="cutLevers"></div>
+  </section>
+
+  <section class="card twothird" id="paceCard">
+    <h2>Pace</h2><p class="sub" id="paceSub"></p>
+    <div class="legend" id="paceLegend"></div>
+    <div id="paceChart"></div>
+  </section>
+  <section class="card third" id="dueCard">
+    <h2>Still to come this month</h2><p class="sub" id="dueSub"></p>
+    <div id="dueList"></div>
+  </section>
+
+  <section class="card half" id="catCard">
+    <h2>Categories</h2><p class="sub">Net of refunds. Pick one to filter the ledger below.</p>
+    <div class="bars" id="cats"></div>
+  </section>
+  <section class="card half" id="merchCard">
+    <h2>Merchants</h2><p class="sub" id="merchSub"></p>
+    <div id="merch"></div>
+  </section>
+
+  <section class="card" id="buildCard">
+    <h2>Build instead of buy</h2>
+    <p class="sub">What you pay for software, services and subscriptions, a year. In the real thing a local model that knows what you have already built judges which of these a weekend of code could actually replace. The demo only does the arithmetic.</p>
+    <div id="buildList"></div>
+    <button class="btn" id="buildGo" style="margin-top:10px">Which of these could I build?</button>
+    <div id="buildA" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card" id="nudgeCard">
+    <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
+      <h2 style="flex:1">Notifications</h2>
+      <div class="switch" role="group" aria-label="Notifications"><button type="button" id="nOff">Off</button><button type="button" id="nOn">On</button></div>
+    </div>
+    <p class="sub">Texts to your phone and Watch, in your own numbers. Never between 10:30 pm and 7:30 am, never while you are driving, and at most two a day (the Sunday recap aside). Nothing is sent on stale data.</p>
+    <div id="nudgeKinds"></div>
+    <div class="lgroup">What it would say right now</div><div id="nudgePreview"></div>
+    <div class="lgroup">Sent lately</div><div id="nudgeLog"></div>
+    <button class="btn quiet" id="nTest" style="margin-top:8px">Send me a test</button>
+  </section>
+
+  <section class="card half" id="intentCard">
+    <h2>Why you bought</h2><p class="sub" id="intentSub"></p>
+    <div class="bars" id="intentBars"></div>
+  </section>
+  <section class="card half" id="intentList">
+    <h2>The calls worth a look</h2><p class="sub">The month's largest purchases LEDGER read as a treat, an impulse or for someone - with what it went on. Open any row in the ledger to correct a call; corrections are how it learns.</p>
+    <div id="intentRows"></div>
+  </section>
+
+  <section class="card" id="budgetCard">
+    <h2>Targets</h2><p class="sub">Monthly target per category. The line is where a steady month would be today.</p>
+    <div id="budgets"></div>
+    <div class="tools" style="margin-top:10px">
+      <select id="bCat" aria-label="Category"></select>
+      <input id="bAmt" type="number" min="0" step="10" inputmode="decimal" placeholder="Monthly target $" style="max-width:190px;border:1px solid var(--ui-border);border-radius:8px;padding:4px 10px;min-height:36px;background:var(--ui-surface);font-size:16px">
+      <button class="btn" id="bSave">Set target</button>
+    </div>
+  </section>
+
+  <div class="scope">Whole history</div>
+
+  <section class="card" id="trendCard">
+    <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
+      <h2 style="flex:1">Where it goes, month by month</h2>
+      <button class="btn quiet" id="trendToggle" aria-pressed="false">Show as table</button>
+    </div>
+    <p class="sub">Net spend per month, split by your five largest categories.</p>
+    <div class="legend" id="trendLegend"></div>
+    <div id="trendChart"></div>
+    <div id="trendTable" hidden></div>
+  </section>
+
+  <section class="card" id="whyCard">
+    <h2>What goes with spending more</h2><p class="sub" id="whySub"></p>
+    <div class="legend" id="whyLegend"></div>
+    <div id="why"></div>
+    <div class="lgroup">By weekday</div>
+    <div class="bars" id="whyWeek" style="max-width:520px"></div>
+  </section>
+
+  <section class="card" id="whenCard">
+    <h2>When you spend</h2><p class="sub" id="whenSub"></p>
+    <div id="heat"></div>
+  </section>
+  <section class="card" id="whereCard">
+    <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
+      <h2 style="flex:1">Where you spend</h2>
+      <button class="btn quiet" id="whereToggle" aria-pressed="false">Show as table</button>
+    </div>
+    <p class="sub" id="whereSub"></p>
+    <div id="whereMap"></div><div id="whereTable" hidden></div>
+  </section>
+
+  <section class="card" id="habitCard">
+    <h2>Habits</h2><p class="sub" id="habitSub"></p>
+    <div id="habits"></div>
+  </section>
+
+  <section class="card twothird" id="recCard">
+    <h2>Subscriptions and repeating bills</h2><p class="sub" id="recSub"></p>
+    <div id="rec"></div>
+  </section>
+  <section class="card third" id="upCard">
+    <h2>Next 45 days</h2><p class="sub" id="upSub"></p>
+    <div id="up"></div>
+  </section>
+
+  <section class="card half" id="flagCard">
+    <h2>Worth a second look</h2><p class="sub">Possible double charges, unusually large ones, first-time merchants.</p>
+    <div id="flags"></div>
+  </section>
+  <section class="card half" id="refundCard">
+    <h2>Refunds</h2><p class="sub" id="refundSub"></p>
+    <div id="refunds"></div>
+  </section>
+
+  <section class="card" id="txCard">
+    <h2>Ledger</h2><p class="sub" id="txSub"></p>
+    <div class="tools">
+      <input id="q" type="search" placeholder="Search merchant, note, category" aria-label="Search">
+      <select id="fClass" aria-label="Kind">
+        <option value="">Everything</option><option value="purchase">Purchases</option><option value="refund">Refunds</option>
+        <option value="payment">Card payments</option><option value="interest">Interest</option><option value="adjustment">Daily Cash adjustments</option>
+      </select>
+      <select id="fCat" aria-label="Category"><option value="">All categories</option></select>
+      <select id="fIntent" aria-label="Reason"><option value="">Any reason</option></select>
+      <select id="fRange" aria-label="Range"><option value="month">This month</option><option value="all">All history</option></select>
+      <button class="btn quiet" id="fClear" hidden>Clear filters</button>
+    </div>
+    <div id="tx"></div>
+    <button class="btn" id="more" hidden style="margin-top:10px">Show more</button>
+  </section>
+</main>
+<div id="tip" hidden></div>
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const SVG = "http://www.w3.org/2000/svg";
+// Every label on this page is data from a bank export: built with textContent, never innerHTML.
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") e.className = v; else if (k === "text") e.textContent = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k)));
+  return e;
+}
+function put(el, ...kids) { el.replaceChildren(...kids.flat().filter((k) => k != null)); }
+function s(tag, attrs, text) {
+  const e = document.createElementNS(SVG, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) e.setAttribute(k, v);
+  if (text != null) e.textContent = text;
+  return e;
+}
+const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const usd2 = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const money = (v) => (Math.abs(v) >= 1000 ? usd : usd2).format(v);
+const monthName = (ym) => new Date(ym + "-15T12:00:00").toLocaleDateString("en-US", { month: "long", year: "numeric" });
+const shortMonth = (ym) => new Date(ym + "-15T12:00:00").toLocaleDateString("en-US", { month: "short" });
+const dayLabel = (d) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5"];
+const PER = { weekly: "week", biweekly: "2 weeks", monthly: "month", quarterly: "quarter", yearly: "year" };
+
+let D = null, month = null, txOffset = 0, txRows = [];
+const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem("ledger." + k)) ?? d; } catch { return d; } },
+                set: (k, v) => { try { localStorage.setItem("ledger." + k, JSON.stringify(v)); } catch {} } };
+
+// native wrappers (the phone's QML client) push the colourway by script, like the shell's API;
+// framed in Deck, shared-ui's runtime takes the shell's night messages itself
+window.deckNight = (on) => { const r = document.documentElement; r.dataset.uiExplicit = "1"; r.dataset.uiMode = on ? "dark" : "light"; };
+
+const QS = new URLSearchParams(location.search);
+if (QS.get("night") !== null) window.deckNight(QS.get("night") === "1");     // ?night=1|0 pins the colourway (wrappers, screenshots)
+
+let toastT;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 2400); }
+
+/* ---- tooltip: enhances, never gates - every value it shows is also on the page or in a table */
+const tip = $("#tip");
+function showTip(ev, title, lines) {
+  tip.replaceChildren(h("div", { class: "t", text: title }),
+    ...lines.map(([label, value, color, line]) => h("div", { class: "l" },
+      h("span", {}, color ? h("i", { class: "key" + (line ? "" : " box"), style: "background:var(" + color + ")" }) : null, label),
+      h("b", { text: value }))));
+  tip.hidden = false;
+  const r = tip.getBoundingClientRect(), x = ev.clientX ?? ev.target.getBoundingClientRect().right, y = ev.clientY ?? ev.target.getBoundingClientRect().top;
+  tip.style.left = Math.max(8, Math.min(innerWidth - r.width - 8, x + 14)) + "px";
+  tip.style.top = Math.max(8, Math.min(innerHeight - r.height - 8, y - r.height - 10)) + "px";
+}
+const hideTip = () => { tip.hidden = true; };
+function niceMax(v) { if (v <= 0) return 100; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * p) return m * p; return 10 * p; }
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : { cache: "no-store" });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || ("HTTP " + r.status));
+  return r.json();
+}
+
+async function load(keepFrame) {
+  if (keepFrame) $("#main").classList.add("dim");       // refetch keeps the frame: no skeleton, no jump
+  try {
+    D = await api("/api/ledger/all" + (month ? "?month=" + month : ""));
+    month = D.month;
+    render();
+  } catch (e) {
+    $("#stale").textContent = "LEDGER is not answering (" + e.message + ")"; $("#stale").classList.add("old");
+  } finally { $("#main").classList.remove("dim"); }
+}
+
+function render() {
+  renderStrip();
+  const empty = !D.status.rows;
+  $("#setup").hidden = !empty;
+  for (const el of document.querySelectorAll("main > .card:not(#setup), main > .scope")) el.hidden = empty;
+  if (empty) return renderSetup();
+  renderHero(); renderPace(); renderDue(); renderCats(); renderMerchants(); renderBudgets();
+  renderAsk(); renderCut(); renderBuild(); renderNudges(); renderIntent(); renderWhy(); renderWhen(); renderWhere();
+  renderTrend(); renderHabits(); renderRecurring(); renderUpcoming(); renderFlags(); renderRefunds();
+  fillFilters(); loadTx(true);
+}
+
+function renderStrip() {
+  const st = D.status, el = $("#stale");
+  el.classList.toggle("old", !!st.stale && !!st.rows);
+  if (!st.rows) el.textContent = "No transactions yet";
+  else el.textContent = "Data through " + dayLabel(st.through) + (st.stale_days > 0 ? " · " + st.stale_days + " day" + (st.stale_days === 1 ? "" : "s") + " old" : " · current")
+    + (st.stale ? " · export Apple Card to refresh" : "");
+  const sel = $("#month"); const months = D.months.length ? D.months.slice().reverse() : [D.month];
+  sel.replaceChildren(...months.map((m) => h("option", { value: m, text: monthName(m), selected: m === D.month })));
+  const i = D.months.indexOf(D.month);
+  $("#prev").disabled = i <= 0; $("#next").disabled = i < 0 || i >= D.months.length - 1;
+}
+
+function renderSetup() {
+  const st = D.status;
+  put($("#setup"), 
+    h("h2", { text: "Waiting for the first statement" }),
+    h("p", { class: "sub", text: "Everything is wired and listening. LEDGER fills itself within about ten minutes of a CSV landing in iCloud Drive." }),
+    h("ol", {}, ...["On the iPhone: Wallet → Apple Card → Card Balance → Statements", "Export Transactions → choose the range → CSV",
+      "Share → Save to Files → iCloud Drive → Spending"].map((t) => h("li", { text: t }))),
+    h("p", { class: "sub", style: "margin-top:12px", text: st.last_push ? "Last word from the phone: " + new Date(st.last_push).toLocaleString() : "Nothing has arrived from the phone yet." }));
+}
+
+function renderHero() {
+  const p = D.pace;
+  $("#heroLbl").textContent = D.is_current ? "Spent so far in " + monthName(D.month) : "Spent in " + monthName(D.month);
+  $("#heroVal").textContent = money(p.mtd.net);
+  const tiles = [];
+  if (p.delta_pct != null) {
+    const up = p.delta_pct > 0;
+    tiles.push(["vs the same day last month", h("span", { class: "delta " + (up ? "up" : "down"), text: (up ? "▲ " : "▼ ") + Math.abs(p.delta_pct).toFixed(0) + "%" }),
+      money(p.last_month_same_day.net) + " by day " + p.day]);
+  }
+  if (D.is_current) tiles.push(["On course for", money(p.projected), "last month finished at " + money(p.last_month_full.net)]);
+  tiles.push(["Purchases", String(p.mtd.purchases), p.mtd.refunded ? money(p.mtd.refunded) + " refunded" : "no refunds"]);
+  const active = D.recurring.filter((r) => r.status === "active");
+  tiles.push(["Subscriptions and bills", money(active.reduce((a, r) => a + r.yearly, 0)) + " / yr", active.length + " active"]);
+  if (D.interest.total > 0) tiles.push(["Interest paid in " + D.interest.year, money(D.interest.total), D.interest.months.length + " charge" + (D.interest.months.length === 1 ? "" : "s")]);
+  put($("#tiles"), ...tiles.map(([l, v, sub]) => h("div", { class: "tile" }, h("div", { class: "lbl", text: l }), h("div", { class: "val" }, v), h("div", { class: "lbl", text: sub }))));
+}
+
+/* ---- pace: one axis, two lines. This month is the subject; last month is context in gray. */
+function renderPace() {
+  const p = D.pace, W = Math.max(300, Math.round($("#paceChart").clientWidth || 720)), H = W < 480 ? 210 : 250, L = 48, R = W < 480 ? 62 : 118, T = 14, B = 26;
+  const cur = p.cumulative, last = p.last_month_cumulative, days = Math.max(p.days_in_month, last.length);
+  const top = niceMax(Math.max(...cur, ...last, D.is_current ? p.projected : 0, 1));
+  const x = (d) => L + (d - 1) / Math.max(1, days - 1) * (W - L - R), y = (v) => T + (1 - v / top) * (H - T - B);
+  $("#paceSub").textContent = D.is_current
+    ? "Running total by day. Everyday spending is running at " + money(p.everyday_rate) + " a day; " + money(p.recurring_still_due) + " of known bills are still due."
+    : "Running total by day, against the month before.";
+  put($("#paceLegend"), 
+    h("span", {}, h("i", { class: "key", style: "background:var(--s1)" }), monthName(D.month)),
+    h("span", {}, h("i", { class: "key", style: "background:var(--context)" }), monthName(prevMonth(D.month))),
+    D.is_current ? h("span", {}, h("i", { class: "key", style: "background:repeating-linear-gradient(90deg,var(--s1) 0 4px,transparent 4px 7px)" }), "Projection") : null);
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Cumulative spending by day of month" });
+  for (let i = 0; i <= 4; i++) {
+    const v = top * i / 4;
+    svg.append(s("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: i ? "var(--grid)" : "var(--ui-border)", "stroke-width": 1 }),
+      s("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end", class: "num" }, usd.format(v)));
+  }
+  for (const dd of [1, 8, 15, 22, days]) svg.append(s("text", { x: x(dd), y: H - 8, "text-anchor": "middle" }, String(dd)));
+  const path = (arr) => arr.map((v, i) => (i ? "L" : "M") + x(i + 1).toFixed(1) + " " + y(v).toFixed(1)).join(" ");
+  if (last.length) svg.append(s("path", { d: path(last), fill: "none", stroke: "var(--context)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  if (cur.length) {
+    svg.append(s("path", { d: path(cur), fill: "none", stroke: "var(--s1)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    const ex = x(cur.length), ey = y(cur[cur.length - 1]);
+    if (D.is_current && cur.length < p.days_in_month) {
+      svg.append(s("line", { x1: ex, y1: ey, x2: x(p.days_in_month), y2: y(p.projected), stroke: "var(--s1)", "stroke-width": 2, "stroke-dasharray": "4 3", opacity: .7 }),
+        s("circle", { cx: x(p.days_in_month), cy: y(p.projected), r: 4, fill: "var(--ui-surface)", stroke: "var(--s1)", "stroke-width": 2 }),
+        s("text", { x: x(p.days_in_month) + 9, y: y(p.projected) + 4, class: "strong" }, money(p.projected)));
+    }
+    svg.append(s("circle", { cx: ex, cy: ey, r: 5, fill: "var(--s1)", stroke: "var(--ui-surface)", "stroke-width": 2 }));
+    if (!D.is_current || cur.length >= p.days_in_month - 3) svg.append(s("text", { x: ex + 9, y: ey + 4, class: "strong" }, money(cur[cur.length - 1])));
+    else svg.append(s("text", { x: ex, y: ey - 10, "text-anchor": "middle", class: "strong" }, money(cur[cur.length - 1])));
+  }
+  if (last.length) {   // end labels only where they will not collide with this month's
+    const ly = y(last[last.length - 1]), cy = cur.length ? y(D.is_current ? p.projected : cur[cur.length - 1]) : -99;
+    if (Math.abs(ly - cy) > 14) svg.append(s("text", { x: x(last.length) + 9, y: ly + 4 }, money(last[last.length - 1])));
+  }
+  // the crosshair finds the X: aim at a day, never at a 2px line
+  const hair = s("line", { y1: T, y2: H - B, stroke: "var(--ui-secondary)", "stroke-width": 1, visibility: "hidden" });
+  const hit = s("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent", tabindex: 0, "aria-label": "Daily running totals" });
+  const at = (ev) => {
+    const box = svg.getBoundingClientRect(), px = ((ev.clientX ?? box.left) - box.left) / box.width * W;
+    const dd = Math.max(1, Math.min(days, Math.round(1 + (px - L) / (W - L - R) * (days - 1))));
+    hair.setAttribute("x1", x(dd)); hair.setAttribute("x2", x(dd)); hair.setAttribute("visibility", "visible");
+    showTip(ev, "Day " + dd, [[monthName(D.month), cur[dd - 1] != null ? money(cur[dd - 1]) : "not yet", "--s1", true],
+      [monthName(prevMonth(D.month)), last[dd - 1] != null ? money(last[dd - 1]) : "–", "--context", true]]);
+  };
+  hit.addEventListener("pointermove", at); hit.addEventListener("focus", at);
+  for (const e of ["pointerleave", "blur"]) hit.addEventListener(e, () => { hair.setAttribute("visibility", "hidden"); hideTip(); });
+  svg.append(hair, hit);
+  put($("#paceChart"), svg);
+}
+function prevMonth(ym) { const [y, m] = ym.split("-").map(Number); return m > 1 ? y + "-" + String(m - 1).padStart(2, "0") : (y - 1) + "-12"; }
+
+function renderDue() {
+  const due = D.is_current ? D.pace.due : [];
+  $("#dueCard").hidden = !D.is_current;
+  $("#dueSub").textContent = due.length ? money(due.reduce((a, x) => a + x.amount, 0)) + " expected before the month closes" : "Nothing predicted before the month closes.";
+  put($("#dueList"), ...due.map((x) => h("div", { class: "row" }, h("span", { class: "muted num", text: dayLabel(x.date) }), h("span", { class: "grow", text: x.merchant }), h("span", { class: "amt num", text: money(x.amount) }))));
+}
+
+/* ---- categories: nominal, so one colour for every bar; the length is the encoding */
+function renderCats() {
+  const cats = D.categories.filter((c) => c.spent > 0), max = Math.max(1, ...cats.map((c) => c.spent)), total = cats.reduce((a, c) => a + c.spent, 0);
+  const targets = D.budget_targets || {};
+  put($("#cats"), ...(cats.length ? cats.map((c) => {
+    const t = targets[c.category];
+    const b = h("button", { class: "bar", type: "button", "aria-label": c.category + " " + money(c.spent) },
+      h("span", { class: "name", text: c.category }),
+      h("span", { class: "track" }, h("span", { class: "fill", style: "width:" + (c.spent / Math.max(max, t || 0) * 100).toFixed(1) + "%" }),
+        t ? h("span", { class: "tick", style: "left:" + (t / Math.max(max, t) * 100).toFixed(1) + "%", title: "target " + money(t) }) : null),
+      h("span", { class: "val num", text: money(c.spent) }));
+    const tipper = (ev) => showTip(ev, c.category, [["Spent", money(c.spent)], ["Share of the month", (c.spent / total * 100).toFixed(0) + "%"], ["Purchases", String(c.count)]].concat(t ? [["Target", money(t)]] : []));
+    b.addEventListener("pointermove", tipper); b.addEventListener("focus", tipper);
+    b.addEventListener("pointerleave", hideTip); b.addEventListener("blur", hideTip);
+    b.addEventListener("click", () => { $("#fCat").value = c.category; $("#fRange").value = "month"; loadTx(true); $("#txCard").scrollIntoView({ behavior: "smooth" }); });
+    return b;
+  }) : [h("div", { class: "empty", text: "No spending recorded this month." })]));
+}
+
+function renderMerchants() {
+  const all = D.merchants, show = store.get("merchAll", false) ? all : all.slice(0, 10), max = Math.max(1, ...all.map((m) => m.spent));
+  $("#merchSub").textContent = all.length + " merchant" + (all.length === 1 ? "" : "s") + " this month. Pick one to see its charges.";
+  const rows = show.map((m) => {
+    const tr = h("tr", { class: "click", tabindex: 0 },
+      h("td", {}, h("div", { text: m.display }), h("div", { class: "track", style: "height:4px;margin-top:4px;position:relative" },
+        h("span", { style: "position:absolute;left:0;top:0;bottom:0;border-radius:0 2px 2px 0;background:var(--s1);width:" + (m.spent / max * 100).toFixed(1) + "%" }))),
+      h("td", { class: "r num muted", text: m.visits + "×" }), h("td", { class: "r num muted", text: money(m.average) }), h("td", { class: "r num", text: money(m.spent) }));
+    const go = () => { $("#q").value = m.display; $("#fRange").value = "all"; $("#fCat").value = ""; loadTx(true); $("#txCard").scrollIntoView({ behavior: "smooth" }); };
+    tr.addEventListener("click", go); tr.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+    return tr;
+  });
+  put($("#merch"), all.length ? h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Merchant" }), h("th", { class: "r", text: "Visits" }), h("th", { class: "r", text: "Typical" }), h("th", { class: "r", text: "Total" }))), h("tbody", {}, ...rows)) : h("div", { class: "empty", text: "Nothing yet." }),
+    all.length > 10 ? h("button", { class: "btn quiet", style: "margin-top:8px", text: store.get("merchAll", false) ? "Show top 10" : "Show all " + all.length, onclick: () => { store.set("merchAll", !store.get("merchAll", false)); renderMerchants(); } }) : null);
+}
+
+/* ---- build instead of buy */
+function renderBuild() {
+  const B = D.buildable || []; $("#buildCard").hidden = !B.length; if (!B.length) return;
+  put($("#buildList"), h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "What" }), h("th", { text: "Kind" }), h("th", { class: "r", text: "Charges" }), h("th", { class: "r", text: "A year" }))),
+    h("tbody", {}, ...B.slice(0, 14).map((b) => h("tr", {}, h("td", {}, b.merchant + " ", b.active ? h("span", { class: "chip", text: "bills every " + PER[b.cadence] }) : null), h("td", { class: "muted", text: b.category }), h("td", { class: "r num muted", text: String(b.charges) }), h("td", { class: "r num", text: money(b.yearly) })))),
+    h("tfoot", {}, h("tr", {}, h("td", { colspan: 3 }, h("b", { text: "Together" })), h("td", { class: "r num" }, h("b", { text: money(B.reduce((a, b) => a + b.yearly, 0)) })))))));
+}
+$("#buildGo").addEventListener("click", async () => {
+  const out = $("#buildA"), t0 = Date.now(); $("#buildGo").disabled = true;
+  const tick = setInterval(() => { out.textContent = "Going through the list… " + Math.round((Date.now() - t0) / 1000) + " s"; }, 500);
+  try { const r = await api("/api/ledger/buildable", {}); put(out, ...md(r.answer || "He came back with nothing - try again in a minute.")); }
+  catch (e) { out.textContent = e.message; } finally { clearInterval(tick); $("#buildGo").disabled = false; }
+});
+
+/* ---- notifications: OFF until he says so; every kind has its own switch */
+async function renderNudges() {
+  let N; try { N = await api("/api/ledger/nudges"); } catch (e) { return; }
+  $("#nOff").setAttribute("aria-pressed", String(!N.master)); $("#nOn").setAttribute("aria-pressed", String(N.master));
+  put($("#nudgeKinds"), ...N.kinds.map((k) => { const box = h("input", { type: "checkbox", style: "min-height:0;width:18px;height:18px" }); box.checked = k.enabled;
+    box.addEventListener("change", async () => { try { await api("/api/ledger/nudges/settings", { kind: k.key, enabled: box.checked }); renderNudges(); } catch (e) { toast(e.message); } });
+    return h("label", { class: "row", style: "cursor:pointer;align-items:center" }, box, h("span", { class: "grow" }, h("div", { text: k.label }), h("div", { class: "muted", style: "font-size:13px", text: k.when }))); }));
+  put($("#nudgePreview"), ...(N.preview.length ? N.preview.map((n) => h("div", { class: "row" }, h("span", { class: "chip" + (n.sent ? "" : n.enabled ? " good" : ""), text: n.sent ? "already sent" : !n.enabled ? "switched off" : N.master ? "will send" : "would send" }), h("span", { class: "grow", text: "LEDGER · " + n.text })))
+    : [h("div", { class: "empty", text: "Nothing worth a text right now - which is the usual state." })]));
+  put($("#nudgeLog"), ...(N.log.length ? N.log.map((n) => h("div", { class: "row" }, h("span", { class: "muted num", style: "white-space:nowrap", text: new Date(n.sent_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) }), h("span", { class: "grow", text: n.text })))
+    : [h("div", { class: "empty", text: "Nothing sent yet." })]));
+  $("#nTest").textContent = N.test_requested ? "Test queued - it goes out within five minutes" : "Send me a test"; $("#nTest").disabled = N.test_requested || !N.master;
+}
+$("#nOn").addEventListener("click", async () => { try { await api("/api/ledger/nudges/settings", { kind: "_master", enabled: true }); renderNudges(); toast("Notifications on"); } catch (e) { toast(e.message); } });
+$("#nOff").addEventListener("click", async () => { try { await api("/api/ledger/nudges/settings", { kind: "_master", enabled: false }); renderNudges(); toast("Notifications off"); } catch (e) { toast(e.message); } });
+$("#nTest").addEventListener("click", async () => { try { await api("/api/ledger/nudges/settings", { kind: "_test", enabled: true }); renderNudges(); } catch (e) { toast(e.message); } });
+
+/* ---- why: inferred from what was on record around the purchase - never asked. One hue: these are magnitudes of one measure. */
+function renderIntent() {
+  const I = D.intent, rows = I.by_intent, max = Math.max(1, ...rows.map((r) => r.spent)), label = Object.fromEntries(D.intents.map((i) => [i.key, i]));
+  const sc = D.intent_score;
+  $("#intentSub").textContent = "Read from what was on record around each purchase - is it a habit, was it talked about beforehand, first time there, how late, what came in the mail - never asked of you. "
+    + (I.untagged.count ? I.untagged.count + " purchase" + (I.untagged.count === 1 ? "" : "s") + " (" + money(I.untagged.spent) + ") had nothing to go on. " : "")
+    + (sc.corrected ? "You have corrected " + sc.corrected + " call" + (sc.corrected === 1 ? "" : "s") + "; it had " + sc.agreed + " of those right." : "Nothing corrected yet, so its accuracy is unmeasured.");
+  put($("#intentBars"), ...(rows.length ? rows.map((r) => { const b = h("button", { class: "bar", type: "button", "aria-label": r.label + " " + money(r.spent) },
+      h("span", { class: "name", text: r.label }), h("span", { class: "track" }, h("span", { class: "fill", style: "width:" + (r.spent / max * 100).toFixed(1) + "%" })), h("span", { class: "val num", text: money(r.spent) }));
+    const tipper = (ev) => showTip(ev, r.label, [["Spent", money(r.spent)], ["Purchases", String(r.count)], ["Means", (label[r.intent] || {}).hint || ""]]);
+    b.addEventListener("pointermove", tipper); b.addEventListener("focus", tipper); b.addEventListener("pointerleave", hideTip); b.addEventListener("blur", hideTip);
+    b.addEventListener("click", () => { $("#fIntent").value = r.intent; $("#fRange").value = "month"; loadTx(true); $("#txCard").scrollIntoView({ behavior: "smooth" }); }); return b; })
+    : [h("div", { class: "empty", text: "No purchases this month." })]));
+  put($("#intentRows"), ...(I.notable.length ? I.notable.map((t) => h("div", { class: "row" }, h("span", { class: "chip" + (t.intent_effective === "impulse" ? " warn" : ""), text: (label[t.intent_effective] || {}).label || "?" }),
+    h("span", { class: "grow" }, h("div", { text: t.merchant }), h("div", { class: "muted", style: "font-size:13px", text: dayLabel(t.date) + " · " + (t.intent ? "you said so" : ((t.inferred || {}).evidence || []).join("; ")) })),
+    h("span", { class: "amt num", text: money(t.amount) }))) : [h("div", { class: "empty", text: "Nothing this month read as a treat, an impulse or for someone." })]));
+}
+
+function renderBudgets() {
+  const b = D.budgets || [];
+  put($("#budgets"), ...(b.length ? b.map((x) => {
+    const pct = Math.min(100, x.spent / x.target * 100), exp = Math.min(100, x.expected / x.target * 100);
+    const word = x.state === "over" ? "▲ over target" : x.state === "ahead" ? "▲ ahead of pace" : "● on pace";
+    return h("div", { class: "meter " + x.state, title: word }, h("span", { text: x.category }),
+      h("span", { class: "track" }, h("span", { class: "fill", style: "width:" + pct.toFixed(1) + "%" }), h("span", { class: "mark", style: "left:" + exp.toFixed(1) + "%" })),
+      h("span", { class: "num", style: "font-size:13px" }, money(x.spent) + " of " + money(x.target) + " ", h("span", { class: "chip " + (x.state === "over" ? "bad" : x.state === "ahead" ? "warn" : "good"), text: word })));
+  }) : [h("div", { class: "empty", text: "No targets set. Add one below - it only watches, it never nags." })]));
+  put($("#bCat"), ...D.categories_known.map((c) => h("option", { value: c, text: c })));
+}
+$("#bSave").addEventListener("click", async () => {
+  try { await api("/api/ledger/budgets", { category: $("#bCat").value, target: Number($("#bAmt").value || 0) }); $("#bAmt").value = ""; toast("Target saved"); load(true); }
+  catch (e) { toast("Could not save: " + e.message); }
+});
+
+/* ---- trend: part-to-whole over time. Colour follows the category, never its rank this month;
+        everything past the five largest folds into Other rather than inventing a sixth hue. */
+function trendModel() {
+  const t = D.trend, top = t.series.slice(0, 5), rest = t.series.slice(5);
+  const series = top.map((x, i) => ({ name: x.category, color: SERIES[i], values: x.values.map((v) => Math.max(0, v)) }));
+  if (rest.length) series.push({ name: "Other", color: "--other", values: t.months.map((_, i) => Math.max(0, rest.reduce((a, x) => a + x.values[i], 0))) });
+  return { months: t.months, series, totals: t.months.map((_, i) => series.reduce((a, x) => a + x.values[i], 0)) };
+}
+function renderTrend() {
+  const m = trendModel(), W = Math.max(300, Math.round($("#trendCard").clientWidth - 34 || 720)), H = W < 480 ? 220 : 260, L = 48, R = 12, T = 22, B = 26;
+  put($("#trendLegend"), ...m.series.map((x) => h("span", {}, h("i", { class: "key box", style: "background:var(" + x.color + ")" }), x.name)));
+  const top = niceMax(Math.max(1, ...m.totals)), band = (W - L - R) / Math.max(1, m.months.length), bw = Math.min(24, band * .6);
+  const y = (v) => T + (1 - v / top) * (H - T - B);
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Monthly spending by category" });
+  for (let i = 0; i <= 4; i++) { const v = top * i / 4; svg.append(s("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: i ? "var(--grid)" : "var(--ui-border)", "stroke-width": 1 }), s("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end", class: "num" }, usd.format(v))); }
+  const peak = m.totals.indexOf(Math.max(...m.totals));
+  m.months.forEach((ym, i) => {
+    const cx = L + band * (i + .5), g = s("g", { tabindex: 0, "aria-label": monthName(ym) + " " + money(m.totals[i]) });
+    let acc = 0; const live = m.series.map((x) => x.values[i]).filter((v) => v > 0).length; let seen = 0;
+    m.series.forEach((x) => {
+      const v = x.values[i]; if (v <= 0) return; seen++;
+      const y0 = y(acc), y1 = y(acc + v), hgt = Math.max(1, y0 - y1 - (seen < live ? 2 : 0));   // 2px surface gap between segments
+      const topSeg = seen === live, r = topSeg ? Math.min(4, hgt) : 0;
+      g.append(s("path", { fill: "var(" + x.color + ")", d: "M" + (cx - bw / 2) + " " + (y1 + (seen < live ? 2 : 0) + hgt) + "V" + (y1 + (seen < live ? 2 : 0) + r) + "q0 " + (-r) + " " + r + " " + (-r) + "H" + (cx + bw / 2 - r) + "q" + r + " 0 " + r + " " + r + "V" + (y1 + (seen < live ? 2 : 0) + hgt) + "Z" }));
+      acc += v;
+    });
+    g.append(s("rect", { x: cx - band / 2, y: T, width: band, height: H - T - B, fill: "transparent" }));   // hit target bigger than the mark
+    const tipper = (ev) => { g.setAttribute("opacity", .82); showTip(ev, monthName(ym), [["Total", money(m.totals[i])]].concat(m.series.filter((x) => x.values[i] > 0).map((x) => [x.name, money(x.values[i]), x.color]))); };
+    g.addEventListener("pointermove", tipper); g.addEventListener("focus", tipper);
+    for (const e of ["pointerleave", "blur"]) g.addEventListener(e, () => { g.removeAttribute("opacity"); hideTip(); });
+    g.addEventListener("click", () => { month = ym; load(true); scrollTo({ top: 0, behavior: "smooth" }); });
+    svg.append(g, s("text", { x: cx, y: H - 8, "text-anchor": "middle" }, shortMonth(ym)));
+    if (i === peak || i === m.months.length - 1) svg.append(s("text", { x: cx, y: y(m.totals[i]) - 6, "text-anchor": "middle", class: "strong" }, money(m.totals[i])));   // label the peak and the latest, not every column
+  });
+  put($("#trendChart"), svg);
+  put($("#trendTable"), h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Category" }), ...m.months.map((ym) => h("th", { class: "r", text: shortMonth(ym) })))),
+    h("tbody", {}, ...m.series.map((x) => h("tr", {}, h("td", { text: x.name }), ...x.values.map((v) => h("td", { class: "r num", text: v ? usd.format(v) : "–" })))),
+      h("tr", {}, h("td", {}, h("b", { text: "Total" })), ...m.totals.map((v) => h("td", { class: "r num" }, h("b", { text: usd.format(v) }))))))));
+}
+$("#trendToggle").addEventListener("click", (e) => {
+  const on = e.target.getAttribute("aria-pressed") !== "true"; e.target.setAttribute("aria-pressed", on); e.target.textContent = on ? "Show as chart" : "Show as table";
+  $("#trendChart").hidden = on; $("#trendLegend").hidden = on; $("#trendTable").hidden = !on;
+});
+
+/* ---- The model writes markdown. Render the little of it he uses - tables, headings, bold, lists - by building
+        DOM nodes; his text is never parsed as HTML. */
+function md(text) {
+  const inline = (t) => t.split(/(\*\*[^*]+\*\*)/g).filter(Boolean).map((x) => x.startsWith("**") && x.endsWith("**") ? h("b", { text: x.slice(2, -2) }) : document.createTextNode(x.replace(/`/g, "")));
+  const out = [], lines = String(text || "").split("\n"); let i = 0;
+  while (i < lines.length) {
+    const ln = lines[i].trim();
+    if (ln.startsWith("|")) {
+      const rows = []; while (i < lines.length && lines[i].trim().startsWith("|")) { rows.push(lines[i].trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim())); i++; }
+      const body = rows.filter((r) => !r.every((c) => /^:?-{2,}:?$/.test(c)));
+      out.push(h("div", { style: "overflow-x:auto;margin:8px 0" }, h("table", {}, h("thead", {}, h("tr", {}, ...body[0].map((c) => h("th", {}, ...inline(c))))), h("tbody", {}, ...body.slice(1).map((r) => h("tr", {}, ...r.map((c) => h("td", {}, ...inline(c)))))))));
+      continue;
+    }
+    if (/^#{1,4}\s/.test(ln)) out.push(h("div", { class: "lgroup", style: "color:var(--ui-text);font-size:15px" }, ...inline(ln.replace(/^#+\s*/, ""))));
+    else if (ln) out.push(h("p", { style: "margin:6px 0" }, ...inline(ln)));
+    i++;
+  }
+  return out;
+}
+
+/* ---- ask: a model for the language, LEDGER's calculators for the figures */
+const EXAMPLES = ["What if I stopped going out for coffee?", "What am I most likely to buy at 3 pm on a Tuesday?", "What subscriptions am I paying for?", "How does this month compare to last?"];
+function renderAsk() { put($("#askEg"), ...EXAMPLES.map((q) => h("button", { class: "btn quiet", type: "button", style: "font-size:13px", text: q, onclick: () => { $("#askQ").value = q; ask(); } }))); }
+let asking = false;
+async function ask() {
+  const q = $("#askQ").value.trim(); if (!q || asking) return;
+  asking = true; $("#askGo").disabled = true; const t0 = Date.now(), out = $("#askA");
+  const tick = setInterval(() => { out.textContent = "Working it out… " + Math.round((Date.now() - t0) / 1000) + " s"; }, 500);
+  try { const r = await api("/api/ledger/ask", { q }); put(out, ...md(r.answer || (r.loading ? "Still starting - give it a moment and ask again." : "Nothing came back - try rephrasing."))); }
+  catch (e) { out.textContent = e.message; }
+  finally { clearInterval(tick); asking = false; $("#askGo").disabled = false; }
+}
+$("#askForm").addEventListener("submit", (e) => { e.preventDefault(); ask(); });
+
+/* ---- cut spending: every control recomputes the plan locally at once and saves itself in the background */
+let planT = {};
+function cutSaving(l, v) {
+  if (v == null) return 0;
+  if (l.kind === "habit") return Math.max(0, l.now - v) * l.unit_yearly;
+  if (l.kind === "subscription") return v === 0 ? l.yearly_now : 0;
+  return Math.max(0, l.now - v) * 12;
+}
+function savePlan(l, v) {
+  l.chosen = v;
+  clearTimeout(planT[l.id]);
+  planT[l.id] = setTimeout(() => api("/api/ledger/plan", { id: l.id, value: v }).catch((e) => toast("Plan not saved: " + e.message)), 350);
+  cutTotals();
+}
+function cutTotals() {
+  const ls = D.cut.levers, yearly = ls.reduce((a, l) => a + cutSaving(l, l.chosen), 0), any = ls.some((l) => l.chosen != null);
+  $("#cutReset").hidden = !any;
+  const p = D.pace;
+  put($("#cutHead"), h("div", {}, h("div", { class: "lbl muted", style: "font-size:13px", text: any ? "Your plan saves" : "Nothing chosen yet" }),
+      h("div", { class: "big2", text: money(yearly / 12) + " a month" })),
+    h("div", { class: "tile" }, h("div", { class: "lbl", text: "Over a year" }), h("div", { class: "val", text: money(yearly) })),
+    h("div", { class: "tile" }, h("div", { class: "lbl", text: "Yours to decide, a year" }), h("div", { class: "val", text: money(D.cut.discretionary_yearly) }),
+      h("div", { class: "lbl", text: yearly ? (yearly / D.cut.discretionary_yearly * 100).toFixed(0) + "% of it" : "habits, subscriptions, discretionary" })),
+    D.is_current && yearly ? h("div", { class: "tile" }, h("div", { class: "lbl", text: "A month like this one would land near" }), h("div", { class: "val", text: money(Math.max(0, p.projected - yearly / 12)) }), h("div", { class: "lbl", text: "instead of " + money(p.projected) })) : null);
+  for (const l of ls) { const el = document.getElementById("sv-" + l.id); if (el) { const v = cutSaving(l, l.chosen); el.textContent = v ? "saves " + money(v) + " / yr" : "no change"; el.classList.toggle("zero", !v); } }
+}
+function renderCut() {
+  const C = D.cut; $("#cutCard").hidden = !C.levers.length; if (!C.levers.length) return;
+  const byId = Object.fromEntries(C.levers.map((l) => [l.id, l]));
+  put($("#cutIdeas"), C.ideas.length ? h("div", { class: "lgroup", style: "margin-top:0", text: "Where the money is, easiest first" }) : null,
+    h("div", { class: "ideas" }, ...C.ideas.map((i) => h("div", { class: "idea" }, h("span", { class: "grow", text: i.text }), h("b", { class: "num", text: money(i.saves_yearly) + " / yr" }),
+      h("button", { class: "btn", text: "Try it", onclick: () => { savePlan(byId[i.lever], i.set); renderCut(); } })))));
+  const row = (l) => {
+    let ctl, say = h("div", { class: "say" });
+    if (l.kind === "subscription") {
+      const keep = h("button", { type: "button", text: "Keep", "aria-pressed": String(l.chosen !== 0) }), cut = h("button", { type: "button", text: "Cancel", "aria-pressed": String(l.chosen === 0) });
+      keep.addEventListener("click", () => { savePlan(l, null); renderCut(); }); cut.addEventListener("click", () => { savePlan(l, 0); renderCut(); });
+      ctl = h("div", { class: "switch", role: "group", "aria-label": l.title }, keep, cut);
+      say.textContent = money(l.amount) + " every " + PER[l.cadence] + " · " + money(l.yearly_now) + " a year" + (l.price_up ? " · price went up" : "") + (l.new ? " · new" : "")
+        + (l.chosen === 0 ? " · still billing - a task to cancel it goes to your to-do list" : "");
+    } else {
+      const habit = l.kind === "habit", cur = l.chosen != null ? l.chosen : l.now;
+      const r = h("input", { type: "range", min: l.min, max: l.max, step: l.step, value: Math.min(cur, l.max), "aria-label": l.title });
+      const words = (v) => habit ? (v >= l.now ? l.now + "× a week now, typically " + money(l.typical) : "from " + l.now + "× to " + v + "× a week")
+        : (v >= l.now ? money(l.now) + " a month lately (" + l.purchases_90d + " purchases in 90 days, one-offs left out)" + (l.usual != null ? " · your usual month was " + money(l.usual) : "") : money(v) + " a month instead of " + money(l.now));
+      say.textContent = words(cur) + (habit && l.chosen != null ? " · last 7 days: " + l.last7 + (l.on_plan ? " - on plan" : " - over plan") : "");
+      r.addEventListener("input", () => { const v = Number(r.value); say.textContent = words(v); savePlan(l, v >= l.now ? null : v); });
+      ctl = r;
+    }
+    return h("div", { class: "lever" }, h("div", {}, h("div", { text: l.title }), h("div", { class: "muted", style: "font-size:12px", text: l.kind === "category" ? "everything else in this category" : l.category })),
+      h("div", { class: "ctl" }, ctl, say), h("div", { class: "save num", id: "sv-" + l.id }));
+  };
+  const group = (kind, title) => { const ls = C.levers.filter((l) => l.kind === kind); return ls.length ? [h("div", { class: "lgroup", text: title }), ...ls.map(row)] : []; };
+  put($("#cutLevers"), ...group("habit", "Habits - how many times a week?"), ...group("subscription", "Subscriptions - keep or cancel"), ...group("category", "Everything else, by category - what monthly figure instead?"));
+  cutTotals();
+}
+$("#cutReset").addEventListener("click", async () => {
+  for (const l of D.cut.levers) if (l.chosen != null) { l.chosen = null; try { await api("/api/ledger/plan", { id: l.id, value: null }); } catch (e) { toast(e.message); } }
+  renderCut();
+});
+
+/* ---- what goes with it: day-level, every signal shown with its n and p. "Goes with", never "causes". */
+function renderWhy() {
+  const an = D.motive.analysis; $("#whyCard").hidden = !an || !an.drivers.length; if (!an || !an.drivers.length) return;
+  const ds = an.drivers, clear = ds.filter((d) => d.verdict === "clear"), hint = ds.filter((d) => d.verdict === "suggestive");
+  const lead = clear.length ? clear.length + " signal" + (clear.length === 1 ? " stands" : "s stand") + " out."
+    : "Nothing stands out yet - no signal separates your bigger-spending days from your smaller ones better than chance would.";
+  $("#whySub").textContent = lead + " Each of " + ds.length + " signals splits your days at your own median and compares what you chose to spend (no bills, no subscriptions, no one-off big items) across " + an.days + " days, " + dayLabel(an.from) + " to " + dayLabel(an.to) + ". With " + ds.length + " tests, one would look 'suggestive' by luck alone, so only 'clear' counts. This shows what goes together, never what causes what - and most body signals only have a few weeks behind them so far.";
+  put($("#whyLegend"), h("span", {}, h("i", { class: "key box", style: "background:var(--context)" }), "Days that signal ran low"), h("span", {}, h("i", { class: "key box", style: "background:var(--s1)" }), "Days it ran high"));
+  const top = Math.max(...ds.flatMap((d) => [d.spend_low, d.spend_high]), 1);
+  const word = { clear: ["good", "● clear"], suggestive: ["warn", "suggestive"], "no difference": ["", "no real difference"] };
+  const show = store.get("whyAll", false) ? ds : ds.slice(0, 8);
+  put($("#why"), ...show.map((d) => { const row = h("div", { class: "why", tabindex: 0 },
+      h("div", {}, h("div", { text: d.label }), h("div", { class: "muted", style: "font-size:12px", text: dayLabel(d.from) + " - " + dayLabel(d.to) })),
+      h("div", { class: "pair" }, h("div", { class: "pb" }, h("i", { style: "width:" + (d.spend_low / top * 100).toFixed(1) + "%;background:var(--context)" }), h("span", { class: "num", text: money(d.spend_low) })),
+        h("div", { class: "pb" }, h("i", { style: "width:" + (d.spend_high / top * 100).toFixed(1) + "%;background:var(--s1)" }), h("span", { class: "num", text: money(d.spend_high) }))),
+      h("div", { style: "text-align:right" }, h("span", { class: "chip " + word[d.verdict][0], text: word[d.verdict][1] }), h("div", { class: "muted num", style: "font-size:12px", text: d.n_low + " + " + d.n_high + " days · " + (d.p < 0.01 ? "p < 0.01" : "p " + d.p.toFixed(2)) })));
+    const tipper = (ev) => showTip(ev, d.label, [["Low days (" + d.n_low + ")", money(d.spend_low) + " a day", "--context"], ["High days (" + d.n_high + ")", money(d.spend_high) + " a day", "--s1"], ["Purchases a day", d.count_low + " vs " + d.count_high], ["Chance alone gives this", (d.p * 100).toFixed(0) + "% of the time"]]);
+    row.addEventListener("pointermove", tipper); row.addEventListener("focus", tipper); row.addEventListener("pointerleave", hideTip); row.addEventListener("blur", hideTip); return row; }),
+    ds.length > 8 ? h("button", { class: "btn quiet", style: "margin-top:8px", text: store.get("whyAll", false) ? "Show the closest 8" : "Show all " + ds.length + " signals tested", onclick: () => { store.set("whyAll", !store.get("whyAll", false)); renderWhy(); } }) : null);
+  const names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"], wmax = Math.max(...an.weekday.map((w) => w.mean_spend), 1);
+  put($("#whyWeek"), ...an.weekday.map((w) => h("div", { class: "bar", style: "cursor:default" }, h("span", { class: "name", text: names[w.weekday] }), h("span", { class: "track" }, h("span", { class: "fill", style: "width:" + (w.mean_spend / wmax * 100).toFixed(1) + "%" })), h("span", { class: "val num", text: money(w.mean_spend) + " a day" }))));
+}
+
+/* ---- when: hour x weekday, one hue, quantile steps. Coverage is said out loud - these are only the purchases whose time is known. */
+function renderWhen() {
+  const M = D.motive, cov = M.coverage, n = M.hour_weekday.count, amt = M.hour_weekday.spent;
+  $("#whenCard").hidden = !cov.timed;
+  if (!cov.timed) return;
+  const by = cov.timed_by || {}, how = [[(by.visit || 0) + (by["gps-gap"] || 0), "matched to a recorded stop"], [by.receipt || 0, "timed by their receipt email"], [by.tap || 0, "timed by the Wallet tap itself"]].filter((x) => x[0]).map((x) => x[0] + " " + x[1]).join(", ");
+  $("#whenSub").textContent = "Built from the " + cov.timed + " of " + cov.purchases + " purchases whose time is known so far: " + how + ". The statement itself carries dates, not times, so this fills in as more days are tracked - and fastest once Wallet taps are wired in.";
+  const vals = amt.flat().filter((v) => v > 0).sort((a, b) => a - b), cut = [0.2, 0.4, 0.6, 0.8].map((q) => vals[Math.min(vals.length - 1, Math.floor(q * vals.length))] || 0);
+  const step = (v) => v <= 0 ? 0 : 1 + cut.filter((c) => v > c).length;
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], hr = (x) => (x % 12 || 12) + (x < 12 ? " am" : " pm");
+  const g = h("div", { class: "heat", role: "img", "aria-label": "Spending by weekday and hour" }, h("span", {}), ...Array.from({ length: 24 }, (_, x) => h("span", { class: "hh", text: x % 3 === 0 ? String(x % 12 || 12) + (x < 12 ? "a" : "p") : "" })));
+  days.forEach((dn, d) => { g.append(h("span", { text: dn })); for (let x = 0; x < 24; x++) {
+    const c = h("button", { class: "c", type: "button", style: "background:var(--q" + step(amt[d][x]) + ")", "aria-label": dn + " " + hr(x) + ": " + n[d][x] + " purchases, " + money(amt[d][x]) });
+    const tipper = (ev) => showTip(ev, dn + ", " + hr(x), [["Spent", money(amt[d][x])], ["Purchases", String(n[d][x])]]);
+    c.addEventListener("pointermove", tipper); c.addEventListener("focus", tipper); c.addEventListener("pointerleave", hideTip); c.addEventListener("blur", hideTip); g.append(c); } });
+  put($("#heat"), g, h("div", { class: "scale" }, "less", ...[1, 2, 3, 4, 5].map((q) => h("i", { style: "background:var(--q" + q + ")" })), "more", h("span", { style: "margin-left:12px", text: "busiest: " + (() => { let b = [0, 0, 0]; amt.forEach((r, d) => r.forEach((v, x) => { if (v > b[0]) b = [v, d, x]; })); return days[b[1]] + " " + hr(b[2]) + ", " + money(b[0]); })() })));
+}
+
+/* ---- where: one dot per place, area = money. No basemap (nothing is fetched from anywhere); a scale bar and labels instead. */
+function renderWhere() {
+  const M = D.motive, P = M.places, cov = M.coverage;
+  $("#whereCard").hidden = !P.length; if (!P.length) return;
+  const tot = P.reduce((a, p) => a + p.spent, 0), med = (k) => { const v = P.flatMap((p) => Array(Math.max(1, Math.round(p.visits))).fill(p[k])).sort((a, b) => a - b); return v[v.length >> 1]; };
+  const c0 = [med("lat"), med("lon")], kx = Math.cos(c0[0] * Math.PI / 180) * 111.32, ky = 110.57;
+  const km = (p) => Math.hypot((p.lon - c0[1]) * kx, (p.lat - c0[0]) * ky), near = P.filter((p) => km(p) <= 30), far = P.filter((p) => km(p) > 30);
+  const ch = cov.channels;
+  $("#whereSub").textContent = cov.placed + " of " + (ch.in_person || 0) + " in-person purchases placed, by matching the merchant's name to the map near where you were. " + ((ch.online || 0) + (ch.billed || 0)) + " online and billed purchases are deliberately not pinned anywhere." + (far.length ? " " + far.length + " place" + (far.length === 1 ? "" : "s") + " farther than 30 km are in the table only." : "");
+  const W = Math.max(300, Math.round($("#whereCard").clientWidth - 34)), H = Math.round(Math.min(520, W * .62)), pad = 30;
+  const xs = near.map((p) => (p.lon - c0[1]) * kx), ys = near.map((p) => (p.lat - c0[0]) * ky), span = Math.max(2, Math.max(...xs) - Math.min(...xs), (Math.max(...ys) - Math.min(...ys)) * W / H);
+  const sc = (W - 2 * pad) / span, cx = (Math.max(...xs) + Math.min(...xs)) / 2, cy = (Math.max(...ys) + Math.min(...ys)) / 2;
+  const X = (p) => W / 2 + ((p.lon - c0[1]) * kx - cx) * sc, Y = (p) => H / 2 - ((p.lat - c0[0]) * ky - cy) * sc, big = Math.max(...near.map((p) => p.spent)), R = (p) => Math.max(4, Math.sqrt(p.spent / big) * 30);
+  const svg = s("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Places where money was spent" });
+  svg.append(s("rect", { x: 0, y: 0, width: W, height: H, rx: 8, fill: "var(--ui-inset)" }));
+  const boxes = [];
+  near.slice().sort((a, b) => b.spent - a.spent).forEach((p, i) => {
+    const g = s("g", { tabindex: 0, "aria-label": p.name + " " + money(p.spent) });
+    g.append(s("circle", { cx: X(p), cy: Y(p), r: R(p), fill: "var(--s1)", "fill-opacity": .55, stroke: "var(--ui-inset)", "stroke-width": 2 }), s("circle", { cx: X(p), cy: Y(p), r: Math.max(12, R(p)), fill: "transparent" }));
+    const tipper = (ev) => { showTip(ev, p.name, [["Spent", money(p.spent)], ["Purchases", String(p.visits)], ["Share of placed spend", (p.spent / tot * 100).toFixed(0) + "%"]].concat(p.merchants.length > 1 ? [["Also here", p.merchants.slice(1).join(", ").slice(0, 60)]] : [])); };
+    g.addEventListener("pointermove", tipper); g.addEventListener("focus", tipper); g.addEventListener("pointerleave", hideTip); g.addEventListener("blur", hideTip);
+    g.addEventListener("click", () => { $("#q").value = p.merchants[0]; $("#fRange").value = "all"; $("#fCat").value = ""; loadTx(true); $("#txCard").scrollIntoView({ behavior: "smooth" }); });
+    svg.append(g);
+    if (i < 9) {      // label the biggest few, and only where the text will not sit on another label
+      const t = p.name.split(",")[0].slice(0, 22), w = t.length * 6.2 + 8, bx = Math.min(W - w - 4, X(p) + R(p) + 4), by = Y(p) - 7;
+      if (!boxes.some((b) => bx < b[0] + b[2] && bx + w > b[0] && by < b[1] + 16 && by + 16 > b[1])) { boxes.push([bx, by, w]); svg.append(s("text", { x: bx, y: Y(p) + 4, class: "strong" }, t)); }
+    }
+  });
+  const barKm = [1, 2, 5, 10, 20].find((k) => k * sc >= 60) || 20;
+  svg.append(s("line", { x1: 14, x2: 14 + barKm * sc, y1: H - 14, y2: H - 14, stroke: "var(--ui-secondary)", "stroke-width": 2 }), s("text", { x: 14, y: H - 20 }, barKm + " km"), s("text", { x: W - 14, y: 18, "text-anchor": "end" }, "north ↑"));
+  put($("#whereMap"), svg);
+  put($("#whereTable"), h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Place" }), h("th", { class: "r", text: "Purchases" }), h("th", { class: "r", text: "Spent" }), h("th", { class: "r", text: "From the centre" }))),
+    h("tbody", {}, ...P.map((p) => h("tr", {}, h("td", {}, h("div", { text: p.name }), p.merchants.length > 1 ? h("div", { class: "muted", style: "font-size:13px", text: p.merchants.join(", ") }) : null), h("td", { class: "r num", text: String(p.visits) }), h("td", { class: "r num", text: money(p.spent) }), h("td", { class: "r num muted", text: km(p).toFixed(1) + " km" })))))));
+}
+$("#whereToggle").addEventListener("click", (e) => { const on = e.target.getAttribute("aria-pressed") !== "true"; e.target.setAttribute("aria-pressed", on); e.target.textContent = on ? "Show as map" : "Show as table"; $("#whereMap").hidden = on; $("#whereTable").hidden = !on; });
+
+/* ---- habits: places he chooses again and again. The weekday strip is one series, one hue: magnitude only. */
+function renderHabits() {
+  const hs = D.habits || [];
+  $("#habitCard").hidden = !hs.length;
+  if (!hs.length) return;
+  const days = hs[0].window_days;
+  $("#habitSub").textContent = "Bought by choice, again and again - not billed to you. Last " + days + " days; together about " + money(hs.reduce((a, x) => a + x.yearly, 0)) + " a year at this rate.";
+  const strip = (x) => {
+    const max = Math.max(1, ...x.by_weekday), names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const g = s("svg", { viewBox: "0 0 98 34", style: "width:98px;height:34px", role: "img", "aria-label": "Purchases by weekday: " + names.map((n, i) => n + " " + x.by_weekday[i]).join(", ") });
+    x.by_weekday.forEach((v, i) => {
+      const hgt = Math.max(1, v / max * 22), r = Math.min(3, hgt);
+      const bar = s("path", { fill: "var(--s1)", d: "M" + (i * 14 + 2) + " 24V" + (24 - hgt + r) + "q0 " + (-r) + " " + r + " " + (-r) + "h" + (10 - 2 * r) + "q" + r + " 0 " + r + " " + r + "V24Z" });
+      const hit = s("rect", { x: i * 14, y: 0, width: 14, height: 34, fill: "transparent" });
+      const tipper = (ev) => showTip(ev, x.display, [[names[i] + "s", v + " purchase" + (v === 1 ? "" : "s")]]);
+      hit.addEventListener("pointermove", tipper); hit.addEventListener("pointerleave", hideTip);
+      g.append(bar, s("text", { x: i * 14 + 7, y: 33, "text-anchor": "middle", style: "font-size:8px" }, names[i][0]), hit);
+    });
+    g.append(s("line", { x1: 0, x2: 98, y1: 24.5, y2: 24.5, stroke: "var(--ui-border)", "stroke-width": 1 }));
+    return g;
+  };
+  put($("#habits"), h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Where" }), h("th", { class: "r", text: "How often" }), h("th", { class: "r", text: "Typical" }), h("th", { class: "r", text: "These " + days + " days" }), h("th", { class: "r", text: "A year at this rate" }), h("th", { text: "By weekday" }))),
+    h("tbody", {}, ...hs.map((x) => { const tr = h("tr", { class: "click", tabindex: 0 }, h("td", {}, h("div", { text: x.display }), h("div", { class: "muted", style: "font-size:13px", text: x.category + " · bought on " + x.days_with_a_purchase + " of " + days + " days" })),
+      h("td", { class: "r num", style: "white-space:nowrap", text: x.per_week + "× a week" }), h("td", { class: "r num", text: money(x.typical) }), h("td", { class: "r num", text: money(x.total) }), h("td", { class: "r num", text: money(x.yearly) }), h("td", {}, strip(x)));
+      const go = () => { $("#q").value = x.display; $("#fRange").value = "all"; $("#fCat").value = ""; loadTx(true); $("#txCard").scrollIntoView({ behavior: "smooth" }); };
+      tr.addEventListener("click", go); tr.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); }); return tr; })))));
+}
+
+function renderRecurring() {
+  const rs = D.recurring, active = rs.filter((r) => r.status === "active");
+  $("#recSub").textContent = active.length ? active.length + " active, about " + money(active.reduce((a, r) => a + r.yearly, 0)) + " a year (" + money(active.reduce((a, r) => a + r.yearly, 0) / 12) + " a month)." : "None detected yet - a series needs three charges, or two that match to the cent.";
+  put($("#rec"), rs.length ? h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "What" }), h("th", { class: "r", text: "Each" }), h("th", { class: "r", text: "A year" }), h("th", { text: "Next" }))),
+    h("tbody", {}, ...rs.map((r) => h("tr", {}, h("td", {}, h("div", {}, r.display + " ", r.new ? h("span", { class: "chip good", text: "● new" }) : null, r.price_up ? h("span", { class: "chip warn", text: "▲ price up from " + money(r.previous_amount) }) : null,
+        r.status === "stopped" ? h("span", { class: "chip", text: "■ stopped" }) : null, r.confidence === "probable" ? h("span", { class: "chip", text: "probable" }) : null),
+        h("div", { class: "muted", style: "font-size:13px", text: "every " + PER[r.cadence] + (r.variable ? ", amount varies" : "") + " · " + r.charges + " charges since " + dayLabel(r.first) })),
+      h("td", { class: "r num", text: money(r.amount) }), h("td", { class: "r num", text: r.status === "active" ? money(r.yearly) : "–" }),
+      h("td", { class: "num muted", style: "white-space:nowrap", text: r.next_expected ? dayLabel(r.next_expected) : "last " + dayLabel(r.last) })))))) : h("div", { class: "empty", text: "Nothing repeating found yet." }));
+}
+function renderUpcoming() {
+  const up = D.upcoming;
+  $("#upSub").textContent = up.length ? money(up.reduce((a, x) => a + x.amount, 0)) + " predicted from your repeating charges" : "No predictions yet.";
+  put($("#up"), ...up.map((x) => h("div", { class: "row" }, h("span", { class: "muted num", text: dayLabel(x.date) }), h("span", { class: "grow", text: x.merchant }), h("span", { class: "amt num", text: money(x.amount) }))));
+}
+
+function renderFlags() {
+  const open = D.flags.filter((f) => !f.reviewed), done = D.flags.filter((f) => f.reviewed);
+  const word = { duplicate: ["bad", "▲ twice?"], large: ["warn", "▲ large"], "first-time": ["", "● first time"] };
+  const row = (f) => h("div", { class: "row" }, h("span", { class: "chip " + word[f.kind][0], text: word[f.kind][1] }),
+    h("span", { class: "grow" }, h("div", { text: f.merchant }), h("div", { class: "muted", style: "font-size:13px", text: dayLabel(f.date) + " · " + f.text })),
+    h("span", { class: "amt num", text: money(f.amount) }),
+    h("button", { class: "btn quiet", text: f.reviewed ? "Reopen" : "It's fine", onclick: async () => { try { await api("/api/ledger/flags/review", { id: f.id, reviewed: !f.reviewed }); load(true); } catch (e) { toast(e.message); } } }));
+  put($("#flags"), ...(open.length ? open.map(row) : [h("div", { class: "empty", text: "Nothing needs a look." })]),
+    done.length ? h("details", { style: "margin-top:8px" }, h("summary", { class: "muted", style: "cursor:pointer;font-size:13px", text: done.length + " reviewed" }), ...done.map(row)) : null);
+}
+
+function renderRefunds() {
+  const r = D.refunds;
+  $("#refundSub").textContent = r.pending.length ? r.pending.length + " still owed to you." : "Mark any purchase as awaiting a refund from the ledger below.";
+  const kids = [];
+  for (const p of r.pending) kids.push(h("div", { class: "row" }, h("span", { class: "chip " + (p.waiting_days > 14 ? "bad" : "warn"), text: "▲ waiting " + p.waiting_days + " d" }), h("span", { class: "grow", text: p.merchant }), h("span", { class: "amt num", text: money(p.amount) })));
+  for (const m of r.matched.slice(0, 6)) kids.push(h("div", { class: "row" }, h("span", { class: "chip good", text: "● refunded" + (m.partial ? " in part" : "") }), h("span", { class: "grow" }, h("div", { text: m.merchant }), h("div", { class: "muted", style: "font-size:13px", text: dayLabel(m.refund_date) + " · against " + money(m.purchase_amount) + " on " + dayLabel(m.purchase_date) })), h("span", { class: "amt num", text: money(m.refunded) })));
+  for (const u of r.unmatched.slice(0, 4)) kids.push(h("div", { class: "row" }, h("span", { class: "chip", text: "credit" }), h("span", { class: "grow", text: u.merchant + " · " + dayLabel(u.refund_date) }), h("span", { class: "amt num", text: money(u.refunded) })));
+  put($("#refunds"), ...(kids.length ? kids : [h("div", { class: "empty", text: "No refunds or credits yet." })]));
+}
+
+/* ---- the ledger itself */
+function fillFilters() {
+  const ci = $("#fIntent").value;
+  put($("#fIntent"), h("option", { value: "", text: "Any reason" }), ...D.intents.map((i) => h("option", { value: i.key, text: i.label, selected: i.key === ci })));
+  const cur = $("#fCat").value;
+  put($("#fCat"), h("option", { value: "", text: "All categories" }), ...D.categories_known.map((c) => h("option", { value: c, text: c, selected: c === cur })));
+}
+async function loadTx(reset) {
+  if (reset) { txOffset = 0; txRows = []; }
+  const p = new URLSearchParams({ limit: 60, offset: txOffset });
+  if ($("#q").value.trim()) p.set("q", $("#q").value.trim());
+  if ($("#fClass").value) p.set("class", $("#fClass").value);
+  if ($("#fCat").value) p.set("category", $("#fCat").value);
+  if ($("#fIntent").value) p.set("intent", $("#fIntent").value);
+  if ($("#fRange").value === "month") { p.set("since", D.month + "-01"); p.set("until", D.month + "-31"); }
+  $("#fClear").hidden = !($("#q").value || $("#fClass").value || $("#fCat").value || $("#fIntent").value || $("#fRange").value !== "month");
+  try {
+    const r = await api("/api/ledger/transactions?" + p);
+    txRows = txRows.concat(r.transactions); txOffset = txRows.length;
+    $("#txSub").textContent = r.total + " row" + (r.total === 1 ? "" : "s") + " · " + money(r.sum.spent) + " spent" + (r.sum.refunded ? " · " + money(r.sum.refunded) + " refunded" : "");
+    $("#more").hidden = txRows.length >= r.total;
+    drawTx();
+  } catch (e) { toast("Ledger: " + e.message); }
+}
+function drawTx() {
+  const body = h("tbody", {});
+  for (const t of txRows) {
+    const tr = h("tr", { class: "click", tabindex: 0 }, h("td", { class: "num muted", style: "white-space:nowrap", text: dayLabel(t.date) }),
+      h("td", {}, h("div", {}, t.merchant + " ", t.provisional ? h("span", { class: "chip warn", text: "provisional" }) : null, t.awaiting_refund ? h("span", { class: "chip warn", text: "awaiting refund" }) : null,
+        t.intent_effective && t.class === "purchase" ? h("span", { class: "chip" + (t.intent ? " good" : ""), title: t.intent ? "your correction" : "inferred", text: ((D.intents.find((i) => i.key === t.intent_effective) || {}).label || "").toLowerCase() }) : null,
+        t.class === "payment" ? h("span", { class: "chip", text: "card payment" }) : null, t.class === "adjustment" ? h("span", { class: "chip", text: "Daily Cash adjustment" }) : null, t.class === "interest" ? h("span", { class: "chip bad", text: "interest" }) : null),
+        t.note ? h("div", { class: "muted", style: "font-size:13px", text: t.note }) : null),
+      h("td", { class: "muted", text: t.category }), h("td", { class: "r num", style: "white-space:nowrap", text: (t.amount < 0 ? "+" : "") + usd2.format(Math.abs(t.amount)) }));
+    const open = () => { const nx = tr.nextSibling; if (nx && nx.dataset && nx.dataset.edit) return nx.remove(); tr.after(editor(t)); };
+    tr.addEventListener("click", open); tr.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
+    body.append(tr);
+  }
+  put($("#tx"), txRows.length ? h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Date" }), h("th", { text: "Merchant" }), h("th", { text: "Category" }), h("th", { class: "r", text: "Amount" }))), body)) : h("div", { class: "empty", text: "Nothing matches." }));
+}
+function editor(t) {
+  const note = h("input", { value: t.note || "", placeholder: "Add a note" });
+  const why = { name: "by the merchant's name", apple: "Apple's own label", map: "the kind of place on the map", david: "you", none: "nothing matched" }[t.category_by] || "";
+  const cat = h("select", {}, h("option", { value: "", text: "Automatic: " + (t.category_by === "david" ? "let LEDGER decide" : t.category + " (" + why + ")") }), ...D.categories_known.map((c) => h("option", { value: c, text: c, selected: c === t.category && t.category_by === "david" })));
+  const alias = h("input", { placeholder: "e.g. Coffee", value: "" });
+  const wait = h("input", { type: "checkbox", style: "min-height:0;width:18px;height:18px" }); wait.checked = !!t.awaiting_refund;
+  const inf = t.inferred || {}, infLabel = (D.intents.find((i) => i.key === inf.intent) || {}).label;
+  const why2 = h("select", {}, h("option", { value: "", text: inf.intent ? "LEDGER's call: " + infLabel + " (" + Math.round(inf.confidence * 100) + "% sure)" : "LEDGER could not tell" }),
+    ...D.intents.map((i) => h("option", { value: i.key, text: "No - it was: " + i.label + " (" + i.hint + ")", selected: i.key === t.intent })));
+  const save = h("button", { class: "btn", text: "Save", onclick: async () => {
+    try {
+      await api("/api/ledger/tx/" + encodeURIComponent(t.uid), { note: note.value, category: cat.value || null, awaiting_refund: wait.checked, intent: why2.value || null });
+      if (alias.value.trim()) await api("/api/ledger/alias", { raw: t.merchant_key, alias: alias.value.trim() });
+      toast("Saved"); load(true);
+    } catch (e) { toast("Could not save: " + e.message); } } });
+  const tr = h("tr", {}, h("td", { colspan: 4 }, h("div", { class: "muted", style: "font-size:13px", text: (t.description || "") + (t.posted ? " · cleared " + dayLabel(t.posted) : "") + " · " + (t.kind || t.class) + " · " + (t.source || "") }),
+    t.class === "purchase" && inf.evidence ? h("div", { style: "font-size:13px;margin-top:6px" }, h("b", { text: "Why LEDGER thinks so: " }), inf.evidence.join("; ") + "." + (inf.prompted_by && inf.prompted_by !== "unknown" ? " Prompted by: " + inf.prompted_by + "." : "")) : null,
+    h("div", { class: "edit" }, h("label", {}, "Note", note), h("label", {}, "Category", cat), t.class === "purchase" ? h("label", {}, "Reason", why2) : null, h("label", {}, "Group this merchant as", alias),
+      h("label", { style: "display:flex;gap:8px;align-items:center;font-size:14px;color:var(--ui-text)" }, wait, "Awaiting a refund")), save));
+  tr.dataset.edit = "1"; return tr;
+}
+let qT;
+$("#q").addEventListener("input", () => { clearTimeout(qT); qT = setTimeout(() => loadTx(true), 250); });
+for (const id of ["#fClass", "#fCat", "#fIntent", "#fRange"]) $(id).addEventListener("change", () => loadTx(true));
+$("#fClear").addEventListener("click", () => { $("#q").value = ""; $("#fClass").value = ""; $("#fCat").value = ""; $("#fIntent").value = ""; $("#fRange").value = "month"; loadTx(true); });
+$("#more").addEventListener("click", () => loadTx(false));
+
+/* ---- month filter: one row, above everything it scopes */
+$("#month").addEventListener("change", (e) => { month = e.target.value; load(true); });
+$("#prev").addEventListener("click", () => { const i = D.months.indexOf(D.month); if (i > 0) { month = D.months[i - 1]; load(true); } });
+$("#next").addEventListener("click", () => { const i = D.months.indexOf(D.month); if (i >= 0 && i < D.months.length - 1) { month = D.months[i + 1]; load(true); } });
+
+let rsT, lastW = innerWidth;
+addEventListener("resize", () => { if (innerWidth === lastW || !D || !D.status.rows) return; lastW = innerWidth; clearTimeout(rsT); rsT = setTimeout(() => { renderPace(); renderTrend(); renderWhere(); }, 150); });
+
+load(false);
+setInterval(() => { if (!document.hidden) load(true); }, 300000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(true); });
+</script>
+<!-- shared-ui-runtime:start -->
+<script>
+/* Shared UI: no network calls, telemetry, secrets, or remote dependency. */
+(() => {
+ const root=document.documentElement, body=document.body;
+ const app=body.dataset.uiApp;
+ const media=matchMedia('(prefers-color-scheme: dark)');
+ function sync(){
+  const declared=root.getAttribute('data-theme');
+  const dark=(app==='deck'||app==='docket') ? body.hasAttribute('data-night')
+   : app==='ops' ? declared==='dark' : root.dataset.uiExplicit ? root.dataset.uiMode==='dark' : media.matches;
+  root.dataset.uiMode=dark?'dark':'light';
+ }
+ sync();media.addEventListener('change',sync);
+ new MutationObserver(sync).observe(body,{attributes:true,attributeFilter:['data-night']});
+ new MutationObserver(sync).observe(root,{attributes:true,attributeFilter:['data-theme']});
+ // Existing shell is the theme authority. Accept it only from our actual
+ // parent and the same tailnet host, never arbitrary message senders.
+ addEventListener('message',e=>{
+  if(window.parent===window||e.source!==parent||!e.data||e.data.deck!=='night'||typeof e.data.on!=='boolean')return;
+  try{if(new URL(e.origin).hostname!==location.hostname)return;}catch{return;}
+  root.dataset.uiExplicit='1';root.dataset.uiMode=e.data.on?'dark':'light';
+ });
+})();
+
+</script>
+<!-- shared-ui-runtime:end -->
+</body>
+</html>
