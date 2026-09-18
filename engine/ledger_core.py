@@ -69,7 +69,7 @@ def klass(row):
 
 _PROCESSOR = re.compile(r"^(SQ|TST|PAYPAL|PP|SP|APLPAY)\s*\*\s*")     # the merchant comes AFTER the star
 _STORE_NO = re.compile(r"(#\s*\d+|\b\d{3,}[A-Z]*\b)")                 # "#1482", "0987", "0194SAN"
-_STREET = re.compile(r"\s+\d{1,6}\s+[A-Z].*$")                         # " 925 BLOSSOM HILL ROAD ..." to the end
+_STREET = re.compile(r"\s+\d{1,6}\s+[A-Z].*$")                         # " 925 LONG HILL ROAD ..." to the end
 _PUNCT = re.compile(r"[^A-Z0-9& ]+")
 
 
@@ -91,7 +91,9 @@ def merchant_key(name, aliases=None):
     return s
 
 
-_ADDRESS = re.compile(r"\b(\d{5})\s+([A-Z]{2})\s+(USA?|US)\s*$")
+# Apple runs a long town into the ZIP ("NEW SPRINGFIELD12345 XX USA") and a ZIP+4 into the state ("12345-6789XX USA");
+# both read as "no address" and made an in-person purchase a web order.
+_ADDRESS = re.compile(r"(?<!\d)(\d{5})(?:-\d{4})?\s*([A-Z]{2})\s+(USA?|US)\s*$")
 
 
 def place_hint(description):
@@ -113,21 +115,21 @@ def place_hint(description):
 NAME_RULES = (
     (r"\bDAILY CASH\b", "Card adjustments"),
     (r"\b(PATREON|KO-?FI|SUBSTACK|BUYMEACOFFEE)\b", "Creators & patronage"),
-    (r"\b(CLAUDE|ANTHROPIC|OPENAI|CHATGPT|PANGRAM|MIDJOURNEY|GITHUB|CURSOR|JETBRAINS|MICROSOFT|ADOBE|1PASSWORD|TAILSCALE|DIGITALOCEAN|NAMECHEAP|CLOUDFLARE)\b", "Software & AI"),
-    (r"\b(HBO|NETFLIX|HULU|DISNEY|PARAMOUNT|PEACOCK|SPOTIFY|YOUTUBE|AUDIBLE|KINDLE|APPLE SERVICES|APPLE COM BILL|AMAZON PRIME|PRIME VIDEO|CRUNCHYROLL|GOOGLE)\b", "Streaming & apps"),
-    (r"\b(STEAM|PLAYSTATION|NINTENDO|XBOX|EPIC GAMES|OCULUS|META QUEST|GOG)\b", "Games"),
-    (r"\b(POLLEN ROBOTICS|CULTS3D|BAMBU|PRUSA|ADAFRUIT|SPARKFUN|DIGIKEY|MOUSER|PRINTABLES|THINGIVERSE|MICRO CENTER)\b", "Maker & robotics"),
-    (r"\b(GUITAR CENTER|REVERB|SWEETWATER|THOMANN|ABLETON|SPLICE|PLUGIN BOUTIQUE|NATIVE INSTRUMENTS|TORSO|ROLAND|AKAI)\b", "Music gear"),
+    (r"\b(CLAUDE|ANTHROPIC|OPENAI|CHATGPT|PANGRAM|MIDJOURNEY|GITHUB|CURSOR|JETBRAINS|MICROSOFT|ADOBE|1PASSWORD|TAILSCALE|DIGITALOCEAN|NAMECHEAP|CLOUDFLARE|QUICKEN|NORDVPN|VPNCOM|DUET AIR|KAGI|3DEXPERIENCE|DASSAULT)\b", "Software & AI"),
+    (r"\b(HBO|NETFLIX|HULU|DISNEY|PARAMOUNT|PEACOCK|SPOTIFY|YOUTUBE|AUDIBLE|KINDLE|APPLE SERVICES|APPLE COM BILL|APPLE\.COM/BILL|HELP\.MAX\.COM|AMAZON PRIME|PRIME VIDEO|CRUNCHYROLL|GOOGLE)\b", "Streaming & apps"),
+    (r"\b(STEAM|STEAMGAMES|PLAYSTATION|NINTENDO|XBOX|EPIC GAMES|OCULUS|META QUEST|GOG)\b", "Games"),
+    (r"\b(POLLEN ROBOTICS|CULTS3D|BAMBU|BAMBULAB|TINYCIRCUIT|CGTRADER|TURBOSQUID\w*|PRUSA|ADAFRUIT|SPARKFUN|DIGIKEY|MOUSER|PRINTABLES|THINGIVERSE|MICRO CENTER)\b", "Maker & robotics"),
+    (r"\b(GUITAR CENTER|REVERB|SWEETWATER|THOMANN|ABLETON|SPLICE|PLUGIN BOUTIQUE|NATIVE INSTRUMENTS|TORSO|ROLAND|AKAI|ROLI|ARTURIA|FOCUSRITE|PRESONUS|BITWIG|PROAUDIOSTAR|ADSRSOUNDS|MODARTT|SOUNDGHOST\w*)\b", "Music gear"),
     (r"\b(APPLE STORE|BEST BUY|LENOVO|NEWEGG|B&H|BHPHOTO|FRYS|SAMSUNG|DELL)\b", "Electronics"),
-    (r"\b(AMAZON|AMZN|EBAY|ETSY|ALIEXPRESS|TEMU|WALMART COM|9TO5TOYS)\b", "Online shopping"),
-    (r"\b(FHDA|DE ANZA|FOOTHILL|PARCHMENT|VISIBLEBODY|VISIBLE BODY|POCKET PREP|COURSERA|UDEMY|CHEGG|PEARSON|MCGRAW|CENGAGE|BOOKSTORE|CAMPUS STR|TUTORING)\b", "Education"),
+    (r"\b(AMAZON|AMZN|EBAY|ETSY|ALIEXPRESS|ALIPAY|TEMU|WALMART COM|9TO5TOYS|ECOMPANY ?STORE|CULT OF MAC)\b", "Online shopping"),
+    (r"\b(FHDA|DE ANZA|FOOTHILL|PARCHMENT|VISIBLEBODY|VISIBLE BODY|POCKET PREP|COURSERA|UDEMY|CHEGG|PEARSON|MCGRAW|CENGAGE|BOOKSTORE|CAMPUS STR|TUTORING|CASTLEBRANCH|NATIONAL REGISTRY EMT|NATL CNTR COMPETENCY|VERIFY STUDENTS|AMERICAN HEART|COMPLETE ANATOMY|SAFETY UNLIMITED)\b", "Education"),
     (r"\b(S?SMOKERS?|SMOKE SHOP|VAPE|TOBACCO|CIGAR|MONSTERS OF ROCK)\b", "Tobacco & vape"),
     (r"\b(KP NCAL|KAISER|DENTAL|DENTIST|ORTHODONT|OPTOMETR|MEDICAL|CLINIC|HOSPITAL|URGENT CARE|LABCORP|QUEST DIAG|PHYSICAL THERAPY)\b", "Health & dental"),
     (r"\b(WALGREENS|CVS|RITE AID|PHARMACY)\b", "Pharmacy"),
     (r"\b(USAA|GEICO|STATE FARM|PROGRESSIVE|ALLSTATE|INSURANCE)\b", "Insurance"),
     (r"\b(T-?MOBILE|VERIZON|AT&T|ATT\b|COMCAST|XFINITY|PG&E|PGE|SAN JOSE WATER|RECOLOGY|GARBAGE)\b", "Phone & utilities"),
     (r"\b(SELF STORAGE|PUBLIC STORAGE|EXTRA SPACE|U-?HAUL)\b", "Storage & moving"),
-    (r"\b(AUTO REPAIR|AUTOZONE|O'?REILLY|PEP BOYS|JIFFY|SMOG|TIRE|FORTES BROTHERS|CAR WASH|DMV)\b", "Car care"),
+    (r"\b(AUTO REPAIR|AUTOZONE|O'?REILLY|PEP BOYS|JIFFY|SMOG|TIRE|FORTES BROTHERS|CAR WASH|DMV|CAPITOL FORD|SAFELITE)\b", "Car care"),
     (r"\b(ARCO|CHEVRON|SHELL OIL|SHELL\b|VALERO|EXXON|MOBIL|\b76\b|COSTCO GAS|FUEL)\b", "Gas & fuel"),
     (r"\b(SERVICEWORKS|CSC SERVICE|LAUNDRY|LAUNDROMAT|DRY CLEAN)\b", "Laundry"),
     (r"\b(HOME DEPOT|LOWE'?S|ACE HARDWARE|OUTDOOR SUPPLY|HARDWARE|IKEA)\b", "Home & hardware"),
@@ -135,11 +137,13 @@ NAME_RULES = (
     (r"\b(MCDONALD|BURGER KING|WENDY|TACO BELL|JACK IN THE BOX|IN-?N-?OUT|CHICK-?FIL|POPEYES|KFC|SUBWAY|CHIPOTLE|PANDA EXPRESS|HABIT BURGER|FIVE GUYS|ANGRY CHICKZ|PAPA JOHN|DOMINO|LITTLE CAESARS|PIZZA HUT|WINGSTOP)\b", "Fast food"),
     (r"\b(TRADER JOE|SAFEWAY|GROCERY OUTLET|WHOLE FOODS|SPROUTS|LUCKY\b|COSTCO|SMART & FINAL|99 RANCH|H MART|MITSUWA|NIJIYA|7-?ELEVEN)\b", "Groceries"),
     (r"\b(MONTALVO|THEATRE|THEATER|CINEMA|AMC\b|CINEMARK|TICKETMASTER|EVENTBRITE|MUSEUM|CONCERT)\b", "Entertainment & arts"),
-    (r"\b(H&M|UNIQLO|OLD NAVY|GAP\b|ZARA|NIKE|ADIDAS|ROSS\b|MARSHALLS|TJ ?MAXX|NORDSTROM|MACY)\b", "Clothing"),
+    (r"\b(H&M|UNIQLO|OLD NAVY|GAP\b|ZARA|NIKE|ADIDAS|ROSS\b|MARSHALLS|TJ ?MAXX|NORDSTROM|MACY|TEEPUBLIC)\b", "Clothing"),
     (r"\b(MICHAELS|JOANN|HOBBY LOBBY|BLICK)\b", "Hobby & craft"),
-    (r"\b(TARGET|WALMART|DOLLAR TREE|DAISO|BIG LOTS)\b", "Shopping"),
+    (r"\b(TARGET|WALMART|DOLLAR TREE|DAISO|BIG LOTS|TIMBUK2|SPORTS BASEMENT|BARNES & NOBLE)\b", "Shopping"),
     (r"\b(PLANET FITNESS|24 HOUR FIT|LA FITNESS|CRUNCH FIT|YMCA|GYM\b|CLIMBING|YOGA)\b", "Fitness"),
     (r"\b(UBER|LYFT|BART\b|VTA\b|CALTRAIN|CLIPPER|PARKING|FASTRAK|TOLL)\b", "Transport & parking"),
+    (r"\b(SFMTA CIT|FRANCHISE TAX)\b", "Government & fees"),
+    (r"\b(UPS STORE|USPS|FEDEX|POSTAL)\b", "Shipping & postage"),
 )
 _NAME_RULES = tuple((re.compile(rx), cat) for rx, cat in NAME_RULES)
 APPLE_CATEGORY = {"restaurants": "Restaurants", "grocery": "Groceries", "gas": "Gas & fuel", "utilities": "Phone & utilities",
@@ -187,6 +191,9 @@ def categorize(row, osm_kind=None):
     return "Other", "none"
 
 
+TEST_CATEGORY = "Test charge"      # his own marker on a row: a payment made to test something, never a purchase (class `adjustment`)
+
+
 def prepare(rows, aliases=None, overrides=None, kinds=None):
     """Annotate rows once: _d (date), _k (klass), _m (merchant key), _cat, _cat_by.
     `kinds` = {merchant_key: OSM kind} for merchants whose place match is solid."""
@@ -200,9 +207,31 @@ def prepare(rows, aliases=None, overrides=None, kinds=None):
         r["_m"] = merchant_key(r.get("merchant") or r.get("description"), aliases)
         if overrides.get(r.get("uid")):
             r["_cat"], r["_cat_by"] = overrides[r.get("uid")].strip(), "david"
+            if r["_cat"] == TEST_CATEGORY:
+                r["_k"] = "adjustment"
         else:
             r["_cat"], r["_cat_by"] = categorize(r, kinds.get(r["_m"]))
         out.append(r)
+    # The history exports name a return by its whole statement line ("BIG BOX 000012345678 ... 12345 XX USA
+    # (RETURN)"), so its key is the purchase's key plus address leftovers and it pairs with nothing - real data
+    # 2026-09-18: 35 of 45 credits. It takes the longest purchase key that begins its own, and that merchant's
+    # usual category: a return belongs to what it undoes.
+    bought = {}
+    for r in out:
+        if r["_k"] == "purchase":
+            c = bought.setdefault(r["_m"], {})
+            c[r["_cat"]] = c.get(r["_cat"], 0) + 1
+    for r in out:
+        if r["_k"] != "refund":
+            continue
+        base = r["_m"] if r["_m"] in bought else max(
+            (k for k in bought if len(k) >= 4 and r["_m"].startswith(k) and (len(k) >= 8 or r["_m"][len(k):len(k) + 1] == " ")),
+            key=len, default=None)                                  # Apple truncates: "AMAZON MKTPL" begins "AMAZON MKTPLACE PMTS"
+        if base:
+            r["_m"] = base
+            usual = max(sorted(bought[base]), key=bought[base].get)
+            if r["_cat_by"] != "david" and r["_cat"] != usual:
+                r["_cat"], r["_cat_by"] = usual, "purchase"
     out.sort(key=lambda r: (r["_d"], r["_m"], r.get("uid") or ""))
     return out
 
@@ -548,20 +577,26 @@ def category_trend(rows):
 
 
 def merchants(rows, since, until):
+    """Where the period's money went, net of what came back in the same period (as by_category): a month once
+    led with a shop that refunded every cent of it. `average` is the typical purchase, before returns."""
     ms = {}
     for r in _in(rows, since, until):
+        if r["_k"] == "refund" and r["_m"] in ms:
+            ms[r["_m"]]["spent"] += r["amount"]
+            ms[r["_m"]]["returned"] -= r["amount"]
         if r["_k"] != "purchase":
             continue
-        m = ms.setdefault(r["_m"], {"merchant": r["_m"], "display": r.get("merchant") or r["_m"],
-                                     "category": r["_cat"], "spent": 0.0, "visits": 0, "last": r["date"]})
+        m = ms.setdefault(r["_m"], {"merchant": r["_m"], "display": r.get("merchant") or r["_m"], "category": r["_cat"],
+                                     "spent": 0.0, "bought": 0.0, "returned": 0.0, "visits": 0, "last": r["date"]})
         m["spent"] += r["amount"]
+        m["bought"] += r["amount"]
         m["visits"] += 1
         m["last"] = max(m["last"], r["date"])
         m["display"] = r.get("merchant") or m["display"]
     out = []
     for m in ms.values():
-        m["spent"] = round(m["spent"], 2)
-        m["average"] = round(m["spent"] / m["visits"], 2)
+        m["average"] = round(m.pop("bought") / m["visits"], 2)
+        m["spent"], m["returned"] = round(max(0.0, m["spent"]), 2), round(m["returned"], 2)
         out.append(m)
     out.sort(key=lambda m: -m["spent"])
     return out
@@ -647,18 +682,30 @@ def flags(rows, today, series=None, reviewed=None):
 
 
 # ----------------------------------------------------------------- refunds
-def refunds(rows, today, awaiting=None):
+def _first_word(key):
+    w = (key or "").split(" ")[0]
+    return w if len(w) >= 3 and w not in ("THE", "WWW") else ""
+
+
+def refunds(rows, today, awaiting=None, loose=False):
     """Credits paired with the purchase they undo, and purchases the owner marked
     'awaiting refund' that no credit has answered yet.
-    `awaiting` = {uid: 'YYYY-MM-DD' marked-on}."""
+    `awaiting` = {uid: 'YYYY-MM-DD' marked-on}.
+    `loose` also pairs a credit that no purchase of its own key answers with a purchase in the SAME category
+    whose key starts with the same word - Amazon bills one order under three names ("AMAZON MKTPL", "AMAZON
+    MARKETPLACE", "AMZN MKTP US") and refunds it under a fourth. Real data 2026-09-18: 34 of 45 credits pair
+    strictly, 40 loosely. Right for netting a sum; never shown as "this credit undid that purchase"."""
     awaiting = awaiting or {}
     purchases = [r for r in rows if r["_k"] == "purchase"]
     used, matched, unmatched = set(), [], []
     for c in [r for r in rows if r["_k"] == "refund"]:
         amt = -c["amount"]
-        cands = [p for p in purchases
-                 if p["_m"] == c["_m"] and p.get("uid") not in used and p["_d"] <= c["_d"]
-                 and (c["_d"] - p["_d"]).days <= REFUND_MATCH_DAYS and p["amount"] + 0.005 >= amt]
+        fits = [p for p in purchases
+                if p.get("uid") not in used and p["_d"] <= c["_d"]
+                and (c["_d"] - p["_d"]).days <= REFUND_MATCH_DAYS and p["amount"] + 0.005 >= amt]
+        cands = [p for p in fits if p["_m"] == c["_m"]]
+        if not cands and loose and _first_word(c["_m"]):
+            cands = [p for p in fits if p["_cat"] == c["_cat"] and _first_word(p["_m"]) == _first_word(c["_m"])]
         if cands:
             exact = [p for p in cands if abs(p["amount"] - amt) < 0.005]
             p = (exact or cands)[-1]
@@ -707,6 +754,86 @@ def interest_ytd(rows, year):
     items = [r for r in rows if r["_k"] == "interest" and r["_d"].year == year]
     return {"year": year, "total": round(sum(r["amount"] for r in items), 2),
             "months": [{"date": r["date"], "amount": round(r["amount"], 2)} for r in items]}
+
+
+# --------------------------------------------------------------- priorities
+# "If your priorities were shown by how you spend money": the whole card history, net of returns, read three
+# ways - where the dollars go, where he pays most OFTEN (a small coffee most days is a priority no ranking by
+# dollars shows), and how much of it was a choice at all. Shares, not sums: the point is the order.
+PRIORITY_YEAR_DAYS = 60      # a calendar year observed for fewer days than this is a fragment, not a year of choices
+CHOICE = (("had_to", "Had to", ("need",)), ("habit", "The usual", ("routine",)),
+          ("chose", "Chose to", ("planned", "project", "treat", "impulse", "social")))
+
+
+def priorities(rows, intents=None, today=None):
+    """{since, until, net, returned, purchases, categories, years, choice}. A return comes out of the category
+    (and, where it can be paired, the purchase) it undoes, so money that went back is nobody's priority."""
+    intents = intents or {}
+    spend = [r for r in rows if r["_k"] in ("purchase", "refund")]
+    if not spend:
+        return {"categories": [], "years": [], "choice": None, "purchases": 0, "net": 0.0, "returned": 0.0}
+    cats, per_year = {}, {}
+    for r in spend:
+        c = cats.setdefault(r["_cat"], {"category": r["_cat"], "bought": 0.0, "returned": 0.0, "count": 0})
+        if r["_k"] == "purchase":
+            c["bought"] += r["amount"]
+            c["count"] += 1
+        else:
+            c["returned"] -= r["amount"]
+        y = per_year.setdefault(r["date"][:4], {})
+        y[r["_cat"]] = y.get(r["_cat"], 0.0) + r["amount"]
+    n = sum(c["count"] for c in cats.values())
+    whole = sum(max(0.0, c["bought"] - c["returned"]) for c in cats.values()) or 1.0
+    out = []
+    for c in cats.values():
+        net = c["bought"] - c["returned"]
+        out.append({"category": c["category"], "spent": round(net, 2), "returned": round(c["returned"], 2), "count": c["count"],
+                    "share": round(100.0 * max(0.0, net) / whole, 1), "count_share": round(100.0 * c["count"] / n, 1) if n else 0.0,
+                    "average": round(c["bought"] / c["count"], 2) if c["count"] else None})
+    out.sort(key=lambda c: -c["spent"])
+
+    spans, years = coverage(rows, today), []
+    for y in sorted(per_year):
+        days = covered_days(spans, date(int(y), 1, 1), date(int(y) + 1, 1, 1))
+        total = sum(v for v in per_year[y].values() if v > 0)
+        if days < PRIORITY_YEAR_DAYS or total <= 0:
+            continue
+        years.append({"year": y, "days": days, "net": round(sum(per_year[y].values()), 2),
+                      "so_far": bool(today and int(y) == today.year),
+                      "shares": dict((k, round(100.0 * max(0.0, v) / total, 1)) for k, v in per_year[y].items())})
+
+    paired = refunds(rows, today or spend[-1]["_d"], loose=True)
+    undone = {}
+    for m in paired["matched"]:
+        undone[m["purchase_uid"]] = undone.get(m["purchase_uid"], 0.0) + m["refunded"]
+    labels = dict((k, lab) for k, lab, _ in INTENTS)
+    group_of = dict((i, g) for g, _, members in CHOICE for i in members)
+    groups = dict((g, {"key": g, "label": lab, "spent": 0.0, "count": 0, "intents": {}}) for g, lab, _ in CHOICE)
+    unread = {"spent": 0.0, "count": 0}
+    for r in spend:
+        if r["_k"] != "purchase":
+            continue
+        kept = r["amount"] - undone.get(r.get("uid"), 0.0)
+        if kept < 0.01:                      # it all went back
+            continue
+        i = intents.get(r.get("uid"))
+        slot = groups.get(group_of.get(i), unread)
+        slot["spent"] += kept
+        slot["count"] += 1
+        if slot is not unread:
+            part = slot["intents"].setdefault(i, {"intent": i, "label": labels.get(i, i), "spent": 0.0, "count": 0})
+            part["spent"] += kept
+            part["count"] += 1
+    judged = sum(g["spent"] for g in groups.values()) + unread["spent"] or 1.0
+    choice = {"groups": [dict(g, spent=round(g["spent"], 2), share=round(100.0 * g["spent"] / judged, 1),
+                              intents=sorted((dict(p, spent=round(p["spent"], 2)) for p in g["intents"].values()), key=lambda p: -p["spent"]))
+                         for g in (groups[k] for k, _, _ in CHOICE)],
+              "unread": {"spent": round(unread["spent"], 2), "count": unread["count"], "share": round(100.0 * unread["spent"] / judged, 1)},
+              "returned_unpaired": round(sum(u["refunded"] for u in paired["unmatched"]), 2)}
+    return {"since": spend[0]["date"], "until": spend[-1]["date"], "purchases": n,
+            "net": round(sum(c["bought"] - c["returned"] for c in cats.values()), 2),
+            "returned": round(sum(c["returned"] for c in cats.values()), 2),
+            "categories": out, "years": years, "choice": choice}
 
 
 # ------------------------------------------------------------------ budgets

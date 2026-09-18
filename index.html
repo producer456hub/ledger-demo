@@ -17,10 +17,12 @@
   --ui-success:#267047; --ui-warning:#885A09; --ui-danger:#B6333F;
   --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --other:#a3abb5;
   --context:#9aa3ad; --grid:#ECEFF2; --st-warn:#fab219; --st-crit:#d03b3b;
+  --y1:#7faee6; --y2:#5593de; --y3:var(--s1);      /* one hue, oldest year lightest - an ordered ramp, not three series */
 }
 :root[data-ui-mode="dark"] {
   --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --other:#5d6874;
   --context:#6d7883; --grid:#2C333B;
+  --y1:#2f609b; --y2:#3474c0;
 }
 * { box-sizing:border-box; }
 html, body { margin:0; }
@@ -107,6 +109,20 @@ tr.click { cursor:pointer; } tr.click:hover td { background:var(--ui-inset); }
 .edit label { display:grid; gap:2px; font-size:12px; color:var(--ui-secondary); }
 .edit input, .edit select { border:1px solid var(--ui-border); border-radius:8px; padding:4px 10px; min-height:36px; background:var(--ui-surface); font-size:16px; color:var(--ui-text); }
 .empty { color:var(--ui-secondary); font-size:14px; padding:6px 0; }
+/* priorities: two rankings side by side, the big categories year by year, one had-to / habit / choice split */
+.prio2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap:0 32px; }
+.fold { display:flex; justify-content:space-between; gap:10px; font-size:13px; color:var(--ui-secondary); padding:2px 0; }
+.yrs { display:grid; gap:10px; max-width:720px; }
+.yr { display:grid; grid-template-columns:minmax(90px, 30%) 1fr; gap:10px; align-items:center; }
+.yr .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.yr .b { display:grid; grid-template-columns:1fr 44px; gap:10px; align-items:center; padding:1px 0; }
+.yr .track { position:relative; height:8px; }
+.yr .fill { position:absolute; inset:0 auto 0 0; border-radius:0 4px 4px 0; min-width:2px; }
+.yr .b:hover .fill, .yr .b:focus-visible .fill { filter:brightness(1.12); }
+.yr .val { font-size:12px; line-height:1; color:var(--ui-secondary); text-align:right; }
+.split { display:flex; gap:2px; height:20px; max-width:720px; margin:6px 0 8px; }
+.split span { min-width:2px; } .split span:first-child { border-radius:4px 0 0 4px; } .split span:last-child { border-radius:0 4px 4px 0; }
+.split span:hover, .split span:focus-visible { filter:brightness(1.12); }
 /* cut spending */
 .cuthead { display:flex; flex-wrap:wrap; gap:16px 40px; align-items:flex-end; margin:4px 0 14px; }
 .cuthead .big2 { font-size:34px; font-weight:600; line-height:1.1; }
@@ -459,6 +475,33 @@ The page runs the real LEDGER server inside your browser; anything you change li
   </section>
 
   <!-- ============ PATTERNS ============ -->
+  <section class="card" id="prioCard" data-tab="patterns">
+    <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
+      <h2 style="flex:1">If your priorities were shown by how you spend money</h2>
+      <button class="btn quiet" id="prioToggle" aria-pressed="false">Show as table</button>
+    </div>
+    <p class="answer" id="prioAnswer"></p>
+    <p class="sub" id="prioSub"></p>
+    <div id="prioCharts">
+      <div class="prio2">
+        <div><div class="lgroup">Of every $100 you spend</div><div class="bars" id="prioMoney"></div></div>
+        <div><div class="lgroup">Of every 100 times you pay</div><div class="bars" id="prioTimes"></div></div>
+      </div>
+      <div id="prioYearsBlock">
+        <div class="lgroup">How the big ones moved, as a share of each year</div>
+        <div class="legend" id="prioYearsLegend" style="margin-top:6px"></div>
+        <div class="yrs" id="prioYears"></div>
+      </div>
+      <div id="prioSplitBlock">
+        <div class="lgroup">Had to, habit, or choice</div>
+        <div class="split" id="prioSplit"></div>
+        <div class="legend" id="prioSplitLegend"></div>
+        <p class="sub" id="prioChose" style="margin:0"></p>
+      </div>
+    </div>
+    <div id="prioTable" hidden></div>
+  </section>
+
   <section class="card" id="trendCard" data-tab="patterns" data-info="Net spend per month, split by your five largest categories. Tap a month to open it.">
     <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
       <h2 style="flex:1">Where it goes, month by month</h2>
@@ -622,6 +665,7 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.ad
 const TABS = ["month", "patterns", "plan", "settings"];
 function showTab(t, keepScroll) {
   if (!TABS.includes(t)) t = "month";
+  hideTip();                                   // the mark it belonged to is about to be hidden
   $("#main").dataset.tab = t; store.set("tab", t);
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === t));
   if (location.hash.slice(1) !== t) history.replaceState(null, "", location.pathname + location.search + "#" + t);
@@ -659,7 +703,7 @@ for (const c of document.querySelectorAll("[data-info]")) setInfo(c, c.dataset.i
 const money0 = (v) => usd.format(v);      // whole dollars where the point is the size, not the cents
 
 /* ---- tooltip: enhances, never gates - every value it shows is also on the page or in a table */
-const tip = $("#tip");
+const tip = $("#tip"); let tipOwner = null, tipTimer = 0, lastPointer = "mouse";
 function showTip(ev, title, lines) {
   tip.replaceChildren(h("div", { class: "t", text: title }),
     ...lines.map(([label, value, color, line]) => h("div", { class: "l" },
@@ -669,8 +713,21 @@ function showTip(ev, title, lines) {
   const r = tip.getBoundingClientRect(), x = ev.clientX ?? ev.target.getBoundingClientRect().right, y = ev.clientY ?? ev.target.getBoundingClientRect().top;
   tip.style.left = Math.max(8, Math.min(innerWidth - r.width - 8, x + 14)) + "px";
   tip.style.top = Math.max(8, Math.min(innerHeight - r.height - 8, y - r.height - 10)) + "px";
+  tipOwner = ev.currentTarget || ev.target; clearTimeout(tipTimer);
+  if (lastPointer === "touch" || lastPointer === "pen") tipTimer = setTimeout(hideTip, 3500);     // a finger never "leaves" - and a tap FOCUSES the mark after its pointerleave, so the box came back and stayed
 }
-const hideTip = () => { tip.hidden = true; };
+const hideTip = () => {
+  const o = tipOwner; tip.hidden = true; tipOwner = null; clearTimeout(tipTimer);
+  // a tap leaves the mark focused, and a second tap on a focused mark fires no focus event - nothing showed. Let go of it
+  // (never for a keyboard or a mouse: there focus is where the reader is)
+  if (o && (lastPointer === "touch" || lastPointer === "pen") && document.activeElement === o) o.blur();
+};
+// a box must never outlive its moment. Leave and blur are not enough: a tap focuses the mark (no blur until something
+// else takes focus - never, on a phone), and a mark hidden by a tab switch or re-render gets neither event.
+addEventListener("pointerdown", (e) => { lastPointer = e.pointerType || "mouse"; if (tipOwner && !tipOwner.contains(e.target)) hideTip(); }, true);
+addEventListener("scroll", hideTip, { capture: true, passive: true });
+addEventListener("keydown", (e) => { lastPointer = "key"; if (e.key === "Escape") hideTip(); });
+addEventListener("resize", hideTip); addEventListener("blur", hideTip); document.addEventListener("visibilitychange", hideTip);
 function niceMax(v) { if (v <= 0) return 100; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * p) return m * p; return 10 * p; }
 
 async function api(path, body) {
@@ -691,6 +748,7 @@ async function load(keepFrame) {
 }
 
 function render() {
+  hideTip();                                   // every mark is about to be replaced
   renderStrip();
   const empty = !D.status.rows;
   $("#setup").hidden = !empty;
@@ -699,7 +757,7 @@ function render() {
   if (empty) return renderSetup();
   renderHero(); renderDue(); renderPace(); renderCats(); renderMerchants(); renderBudgets();
   renderAsk(); renderCut(); renderBuild(); renderNudges(); renderIntent(); renderWhy(); renderWhen(); renderWhere();
-  renderTrend(); renderHabits(); renderRecurring(); renderFlags(); renderRefunds(); renderLook(); renderKnow();
+  renderPrio(); renderTrend(); renderHabits(); renderRecurring(); renderFlags(); renderRefunds(); renderLook(); renderKnow();
   fillFilters(); loadTx(true);
 }
 
@@ -834,7 +892,7 @@ function renderMerchants() {
   $("#merchSub").textContent = all.length + " place" + (all.length === 1 ? "" : "s") + " this month";
   const rows = show.map((m) => {
     const tr = h("tr", { class: "click", tabindex: 0 },
-      h("td", {}, h("div", { text: m.display }), h("div", { class: "track", style: "height:4px;margin-top:4px;position:relative" },
+      h("td", {}, h("div", { text: m.display }), m.returned ? h("div", { class: "muted", style: "font-size:13px", text: "after " + money(m.returned) + " sent back" }) : null, h("div", { class: "track", style: "height:4px;margin-top:4px;position:relative" },
         h("span", { style: "position:absolute;left:0;top:0;bottom:0;border-radius:0 2px 2px 0;background:var(--s1);width:" + (m.spent / max * 100).toFixed(1) + "%" }))),
       h("td", { class: "r num muted", text: m.visits + "×" }), h("td", { class: "r num muted", text: money(m.average) }), h("td", { class: "r num", text: money(m.spent) }));
     const go = () => { $("#q").value = m.display; $("#fRange").value = "all"; $("#fCat").value = ""; loadTx(true); showTx(); };
@@ -922,6 +980,77 @@ $("#bSave").addEventListener("click", async () => {
 
 /* ---- trend: part-to-whole over time. Colour follows the category, never its rank this month;
         everything past the five largest folds into Other rather than inventing a sixth hue. */
+/* ---- priorities: all history, net of returns. Each ranking is one series, so one hue; the fold is words, not a bar
+        (it would be the longest one); the years are an ordered ramp of the same hue; the split is three identities + grey. */
+const PRIO_TOP = 8, PRIO_YEAR_CATS = 6;
+const per100 = (v) => v >= 10 ? String(Math.round(v)) : v > 0 && v < 0.1 ? "<0.1" : v.toFixed(1);
+function prioRank(el, cats, key, show) {
+  const top = cats.slice(0, PRIO_TOP), rest = cats.slice(PRIO_TOP), max = Math.max(1, ...top.map((c) => c[key]));
+  put(el, ...top.map((c) => {
+    const b = h("button", { class: "bar", type: "button", "aria-label": c.category + " " + show(c[key]) },
+      h("span", { class: "name", text: c.category }), h("span", { class: "track" }, h("span", { class: "fill", style: "width:" + (c[key] / max * 100).toFixed(1) + "%" })), h("span", { class: "val num", text: show(c[key]) }));
+    const tipper = (ev) => showTip(ev, c.category, [["Kept, after returns", money(c.spent)], ["Purchases", c.count.toLocaleString("en-US")], ["Typical purchase", c.average != null ? money(c.average) : "–"]].concat(c.returned ? [["Sent back", money(c.returned)]] : []));
+    b.addEventListener("pointermove", tipper); b.addEventListener("focus", tipper); b.addEventListener("pointerleave", hideTip); b.addEventListener("blur", hideTip);
+    b.addEventListener("click", () => { $("#fCat").value = c.category; $("#fRange").value = "all"; loadTx(true); showTx(); });
+    return b;
+  }), rest.length ? h("div", { class: "fold" }, h("span", { text: rest.length + " smaller " + (rest.length === 1 ? "category" : "categories") }), h("span", { class: "num", text: show(rest.reduce((a, c) => a + c[key], 0)) })) : null);
+}
+function renderPrio() {
+  const P = D.priorities, on = !!(P && P.categories.some((c) => c.spent > 0));
+  $("#prioCard").hidden = !on; if (!on) return;
+  const cats = P.categories.filter((c) => c.spent > 0), byN = cats.slice().sort((a, b) => b.count - a.count);
+  const named = cats.filter((c) => c.category !== "Other"), often = byN.find((c) => c.category !== "Other") || byN[0];
+  const lead = named.slice(0, 3).map((c) => c.category);
+  $("#prioAnswer").textContent = lead[0] === often.category && lead.length < 2 ? "Dollars and habit agree: " + lead[0] + "."
+    : "Dollars say " + lead.join(", ") + ". Habit says " + often.category + ": " + per100(often.count_share) + " of every 100 purchases.";
+  $("#prioSub").textContent = monthName(P.since.slice(0, 7)) + " – " + monthName(P.until.slice(0, 7)) + " · " + money0(P.net) + " kept" + (P.returned ? " after " + money0(P.returned) + " sent back" : "") + " · " + P.purchases.toLocaleString("en-US") + " purchases";
+  prioRank($("#prioMoney"), cats, "share", (v) => usd2.format(v));
+  prioRank($("#prioTimes"), byN, "count_share", per100);
+
+  const years = P.years.slice(-3), ramp = ["--y1", "--y2", "--y3"].slice(3 - years.length), yname = (y) => y.year + (y.so_far ? " so far" : "");
+  $("#prioYearsBlock").hidden = years.length < 2;
+  if (years.length >= 2) {
+    const rows = named.slice(0, PRIO_YEAR_CATS), top = Math.max(1, ...rows.map((c) => Math.max(...years.map((y) => y.shares[c.category] || 0))));
+    put($("#prioYearsLegend"), ...years.map((y, i) => h("span", {}, h("i", { class: "key box", style: "background:var(" + ramp[i] + ")" }), yname(y))));
+    put($("#prioYears"), ...rows.map((c) => h("div", { class: "yr" }, h("span", { class: "name", text: c.category }), h("span", {}, ...years.map((y, i) => {
+      const v = y.shares[c.category] || 0;
+      const b = h("span", { class: "b", tabindex: 0, "aria-label": c.category + ", " + yname(y) + ": " + per100(v) + "%" },
+        h("span", { class: "track" }, h("span", { class: "fill", style: "width:" + (v / top * 100).toFixed(1) + "%;background:var(" + ramp[i] + ")" })), h("span", { class: "val num", text: per100(v) + "%" }));
+      const tipper = (ev) => showTip(ev, c.category, years.map((z, j) => [yname(z), per100(z.shares[c.category] || 0) + "% of " + money0(z.net), ramp[j]]));
+      b.addEventListener("pointermove", tipper); b.addEventListener("focus", tipper); b.addEventListener("pointerleave", hideTip); b.addEventListener("blur", hideTip);
+      return b;
+    })))));
+  }
+
+  const C = P.choice, parts = C ? C.groups.map((g, i) => Object.assign({ color: SERIES[i] }, g)).concat(C.unread.count ? [Object.assign({ key: "unread", label: "Could not tell", color: "--other", intents: [] }, C.unread)] : []).filter((g) => g.spent > 0) : [];
+  const readable = parts.length && !(C.unread.share > 50);       // mostly "could not tell" is not a finding: say nothing rather than draw it
+  $("#prioSplitBlock").hidden = !readable;
+  if (readable) {
+    put($("#prioSplit"), ...parts.map((g) => {
+      const seg = h("span", { tabindex: 0, style: "flex:" + g.share + " 0 0;background:var(" + g.color + ")", "aria-label": g.label + " " + per100(g.share) + "%" });
+      const tipper = (ev) => showTip(ev, g.label, [["Share", per100(g.share) + "%"], ["Spent", money(g.spent)], ["Purchases", g.count.toLocaleString("en-US")]].concat(g.intents.length > 1 ? g.intents.map((x) => [x.label, money(x.spent)]) : []));
+      seg.addEventListener("pointermove", tipper); seg.addEventListener("focus", tipper); seg.addEventListener("pointerleave", hideTip); seg.addEventListener("blur", hideTip);
+      return seg;
+    }));
+    put($("#prioSplitLegend"), ...parts.map((g) => h("span", {}, h("i", { class: "key box", style: "background:var(" + g.color + ")" }), g.label + " ", h("b", { class: "num", style: "color:var(--ui-text)", text: per100(g.share) + "%" }), " · " + money0(g.spent))));
+    const chose = C.groups.find((g) => g.key === "chose");
+    $("#prioChose").textContent = chose && chose.intents.length ? "Chose to = " + chose.intents.map((x) => x.label.toLowerCase() + " " + money0(x.spent)).join(" · ") : "";
+  }
+  setInfo("#prioCard", "Everything on the card since the first statement, after returns - money that went back is nobody's priority, and paying the card off is not spending. "
+    + "Had to, habit or choice is LEDGER's own reading of each purchase, never asked of you" + (C && C.returned_unpaired ? "; " + money(C.returned_unpaired) + " of returns could not be tied to a purchase and are left in" : "") + ".");
+
+  const yrs = P.years.slice(-3);
+  put($("#prioTable"), h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Category" }), h("th", { class: "r", text: "Kept" }), h("th", { class: "r", text: "Of every $100" }), h("th", { class: "r", text: "Purchases" }), h("th", { class: "r", text: "Of every 100" }), h("th", { class: "r", text: "Typical" }), ...yrs.map((y) => h("th", { class: "r", text: yname(y) })))),
+    h("tbody", {}, ...cats.map((c) => h("tr", {}, h("td", { text: c.category }), h("td", { class: "r num", text: money(c.spent) }), h("td", { class: "r num", text: usd2.format(c.share) }), h("td", { class: "r num", text: c.count.toLocaleString("en-US") }), h("td", { class: "r num", text: per100(c.count_share) }), h("td", { class: "r num", text: c.average != null ? money(c.average) : "–" }), ...yrs.map((y) => h("td", { class: "r num", text: per100(y.shares[c.category] || 0) + "%" }))))))),
+    readable ? h("div", { style: "overflow-x:auto;margin-top:14px" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Had to, habit, or choice" }), h("th", { class: "r", text: "Spent" }), h("th", { class: "r", text: "Share" }), h("th", { class: "r", text: "Purchases" }))),
+      h("tbody", {}, ...parts.flatMap((g) => [h("tr", {}, h("td", {}, h("b", { text: g.label })), h("td", { class: "r num", text: money(g.spent) }), h("td", { class: "r num", text: per100(g.share) + "%" }), h("td", { class: "r num", text: g.count.toLocaleString("en-US") }))]
+        .concat(g.intents.length > 1 ? g.intents.map((x) => h("tr", {}, h("td", { class: "muted", text: "– " + x.label }), h("td", { class: "r num muted", text: money(x.spent) }), h("td", {}), h("td", { class: "r num muted", text: x.count.toLocaleString("en-US") }))) : []))))) : null);
+}
+$("#prioToggle").addEventListener("click", (e) => {
+  const on = e.target.getAttribute("aria-pressed") !== "true"; e.target.setAttribute("aria-pressed", on); e.target.textContent = on ? "Show as chart" : "Show as table";
+  $("#prioCharts").hidden = on; $("#prioTable").hidden = !on;
+});
+
 function trendModel() {
   const t = D.trend, top = t.series.slice(0, 5), rest = t.series.slice(5);
   const series = top.map((x, i) => ({ name: x.category, color: SERIES[i], values: x.values.map((v) => Math.max(0, v)) }));
@@ -1227,8 +1356,9 @@ function renderWhere() {
   // `near` always holds the hub itself (0 km), so the projection below never sees an empty set
   const ch = cov.channels;
   const byS = P.slice().sort((a, b) => b.spent - a.spent), topp = byS.find((q) => !/\(area\)$/.test(q.name)) || byS[0];    // a town-level pin is not a place
-  title("#whereCard", "Most spent at " + topp.name.split(",")[0] + " · " + money0(topp.spent));
-  setInfo("#whereCard", cov.placed + " of " + (ch.in_person || 0) + " in-person purchases placed, by matching the merchant's name to the map near where you were. " + ((ch.online || 0) + (ch.billed || 0)) + " online and billed purchases are deliberately not pinned anywhere." + (far.length ? " " + far.length + " place" + (far.length === 1 ? "" : "s") + " farther than 30 km are in the table only." : ""));
+  const first = P.reduce((a, p) => p.dates.length && (!a || p.dates[0] < a) ? p.dates[0] : a, null);      // an all-time total read as "this month" is a fright: say since when
+  title("#whereCard", "Most spent at " + topp.name.split(",")[0] + " · " + money0(topp.spent) + (first ? " since " + shortMonth(first.slice(0, 7)) + " " + first.slice(0, 4) : ""));
+  setInfo("#whereCard", cov.placed + " of " + (ch.in_person || 0) + " in-person purchases placed, by the merchant's name and the street on the statement, or near where you were. Totals are what you kept: a return comes off the place it went back to. " + ((ch.online || 0) + (ch.billed || 0)) + " online and billed purchases are deliberately not pinned anywhere." + (far.length ? " " + far.length + " place" + (far.length === 1 ? "" : "s") + " farther than 30 km are in the table only." : ""));
   const W = Math.max(300, Math.round($("#whereCard").clientWidth - 34)), H = Math.round(Math.min(520, W * .62)), pad = 30;
   // Web Mercator in zoom-20 pixel space, scaled to fit: the circles then sit on street tiles exactly. At most a few
   // dozen km across, so the projection's own distortion is nil; `sc` stays "pixels per km" for the scale bar.
@@ -1272,7 +1402,7 @@ function renderWhere() {
   svg.append(s("line", { x1: 14, x2: 14 + barKm * sc, y1: H - 14, y2: H - 14, stroke: "var(--ui-secondary)", "stroke-width": 2 }), s("text", { x: 14, y: H - 20 }, barKm + " km"), s("text", { x: W - 14, y: 18, "text-anchor": "end" }, "north ↑"));
   put($("#whereMap"), svg);
   put($("#whereTable"), h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Place" }), h("th", { text: "When" }), h("th", { class: "r", text: "Purchases" }), h("th", { class: "r", text: "Spent" }), h("th", { class: "r", text: "From the centre" }))),
-    h("tbody", {}, ...P.map((p) => h("tr", {}, h("td", {}, h("div", { text: p.name }), p.merchants.length > 1 ? h("div", { class: "muted", style: "font-size:13px", text: p.merchants.join(", ") }) : null), h("td", { class: "num", text: whenLabel(p.dates) }), h("td", { class: "r num", text: String(p.visits) }), h("td", { class: "r num", text: money(p.spent) }), h("td", { class: "r num muted", text: km(p).toFixed(1) + " km" })))))));
+    h("tbody", {}, ...P.map((p) => h("tr", {}, h("td", {}, h("div", { text: p.name }), p.merchants.length > 1 ? h("div", { class: "muted", style: "font-size:13px", text: p.merchants.join(", ") }) : null, p.visits > 1 && p.mean != null ? h("div", { class: "muted num", style: "font-size:13px", text: "smallest " + money(p.smallest) + " · mean " + money(p.mean) + " · largest " + money(p.largest) }) : null), h("td", { class: "num", text: whenLabel(p.dates) }), h("td", { class: "r num", text: String(p.visits) }), h("td", { class: "r num", text: money(p.spent) }), h("td", { class: "r num muted", text: km(p).toFixed(1) + " km" })))))));
 }
 $("#mapToggle").addEventListener("click", () => { store.set("basemap", !store.get("basemap", true)); renderWhere(); });
 $("#whereToggle").addEventListener("click", (e) => { const on = e.target.getAttribute("aria-pressed") !== "true"; e.target.setAttribute("aria-pressed", on); e.target.textContent = on ? "Show as map" : "Show as table"; $("#whereMap").hidden = on; $("#whereTable").hidden = !on; });
@@ -1429,7 +1559,7 @@ function drawTx() {
 }
 function editor(t) {
   const note = h("input", { value: t.note || "", placeholder: "Add a note" });
-  const why = { name: "by the merchant's name", apple: "Apple's own label", map: "the kind of place on the map", david: "you", none: "nothing matched" }[t.category_by] || "";
+  const why = { name: "by the merchant's name", apple: "Apple's own label", map: "the kind of place on the map", david: "you", purchase: "the purchase it undoes", none: "nothing matched" }[t.category_by] || "";
   const cat = h("select", {}, h("option", { value: "", text: "Automatic: " + (t.category_by === "david" ? "decide automatically" : t.category + " (" + why + ")") }), ...D.categories_known.map((c) => h("option", { value: c, text: c, selected: c === t.category && t.category_by === "david" })));
   const alias = h("input", { placeholder: "e.g. Coffee", value: "" });
   const wait = h("input", { type: "checkbox", style: "min-height:0;width:18px;height:18px" }); wait.checked = !!t.awaiting_refund;

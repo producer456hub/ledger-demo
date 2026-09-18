@@ -160,6 +160,7 @@ class Data(object):
         self.flags = lc.flags(self.rows, self.today, self.series, self.reviewed)
         self.refunds = lc.refunds(self.rows, self.today, self.awaiting)
         self.habits = lc.habits(self.rows, self.today)
+        self.priorities = lc.priorities(self.rows, self.intents, self.today)
         self.plan = dict((r["lever_id"], r["value"]) for r in conn.execute("SELECT lever_id, value FROM plan"))
         self.cut = lc.levers(self.rows, self.today, self.series, self.habits, self.plan)
         self.timed = []
@@ -170,12 +171,18 @@ class Data(object):
         the 43 purchases whose time is known must never read as if it were all 830."""
         by_uid = dict((r.get("uid"), r) for r in self.rows)
         timed, placed, chan = [], [], {}
+        undone = {}                     # money that went back was not spent anywhere: one shop read three times what he kept there
+        for x in lc.refunds(self.rows, self.today, loose=True)["matched"]:
+            undone[x["purchase_uid"]] = undone.get(x["purchase_uid"], 0.0) + x["refunded"]
         for m in conn.execute("SELECT * FROM moments"):
             r = by_uid.get(m["uid"])
-            if r is None:
+            if r is None or r["_k"] != "purchase":          # a row he marked a test charge is not a purchase
+                continue
+            kept = round(r["amount"] - undone.get(r.get("uid"), 0.0), 2)
+            if kept < 0.01:
                 continue
             chan[m["channel"]] = chan.get(m["channel"], 0) + 1
-            base = {"amount": r["amount"], "merchant": r.get("merchant") or r["_m"], "mkey": r["_m"], "category": r["_cat"], "date": r["date"]}
+            base = {"amount": kept, "merchant": r.get("merchant") or r["_m"], "mkey": r["_m"], "category": r["_cat"], "date": r["date"]}
             if m["ts"] is not None:
                 timed.append(dict(base, ts=m["ts"], time_source=m["time_source"]))
             if m["merchant_lat"] is not None:
@@ -372,10 +379,10 @@ def bundle(D, ym):
     out.update({
         "ok": True, "version": VERSION, "today": D.today.isoformat(), "months": months,
         "status": D.staleness(), "trend": lc.category_trend(D.rows),
-        "cut": D.cut, "motive": D.motive, "habits": D.habits, "recurring": D.series, "upcoming": lc.upcoming(D.series, D.today, D.today + timedelta(days=45)),
+        "cut": D.cut, "motive": D.motive, "habits": D.habits, "priorities": D.priorities, "recurring": D.series, "upcoming": lc.upcoming(D.series, D.today, D.today + timedelta(days=45)),
         "flags": D.flags, "refunds": D.refunds, "interest": lc.interest_ytd(D.rows, D.today.year),
         "all_time": lc.totals(D.rows),
-        "categories_known": sorted(set(r["_cat"] for r in D.rows)),
+        "categories_known": sorted(set(r["_cat"] for r in D.rows) | set([lc.TEST_CATEGORY])),
         "budget_targets": D.budgets, "buildable": lc.buildable(D.rows, D.today, D.series),
         "intents": [{"key": k, "label": lab, "hint": hint} for k, lab, hint in lc.INTENTS],
         "intent_score": D.intent_score,

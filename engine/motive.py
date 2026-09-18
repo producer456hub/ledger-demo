@@ -46,6 +46,11 @@ LOCAL_KM = 120              # a name that only resolves farther than this from t
 ONLINE = ("AMAZON", "APPLE SERVICES", "APPLE COM", "PATREON", "GOOGLE", "OPENAI", "CLAUDE AI", "ANTHROPIC",
           "HBO MAX", "NETFLIX", "SPOTIFY", "EBAY", "PAYPAL", "ETSY", "UBER", "LYFT", "DOORDASH", "GITHUB",
           "MICROSOFT", "ADOBE", "STEAM", "PLAYSTATION", "NINTENDO", "AUDIBLE", "KINDLE", "DISNEY", "HULU")
+# A web order says so in its statement line: a domain, "WEB ORDER", "BIGBOXCOM8069...", or a phone number where an
+# in-person line has the town ("... 888BIGBOXX 12345 XX USA", "... 800-555-0100 12345 XX USA"). Real data 2026-09-18:
+# two web orders billed from another state were pinned beside the shop he visits most.
+ONLINE_MARK = re.compile(r"\.(?:COM|NET|US|ORG|IO|AI)\b|\bWWW\b|\bWEB ?ORDER\b|^[A-Z]+COM\d"
+                         r"|(?:\b\d{3}-\d{3}-\d{3,4}|\b\d{3}-\d{7}|\b\d{10}|\b8(?:00|33|44|55|66|77|88)[A-Z]{7})\s+\d{5}(?:-\d{4})?\s*[A-Z]{2}\s+USA?\s*$")
 # pay on the way out; everything else (counters, pumps), on the way in
 CHECKOUT_LAST = ("Groceries", "Shopping", "Pharmacy", "Home & hardware", "Electronics", "Clothing", "Hobby & craft",
                  "Music gear", "Alcohol", "Treats & gifts", "Health & dental", "Car care")
@@ -84,6 +89,9 @@ def channel(row, hint, billed):
         return "online"
     if not hint:
         return "online"             # no address tail at all: a web checkout
+    line = re.sub(r"\s*\((?:RETURN|REVERSAL)\)\s*$", "", (row.get("description") or "").upper().strip())
+    if ONLINE_MARK.search(line.replace("GOSQ.COM", " ")):          # Square prints its own domain where the town goes, on a counter sale too
+        return "online"
     return "in_person"
 
 
@@ -147,6 +155,60 @@ def match_day(purchases, stops, geocode):
     return out
 
 
+# ------------------------------------------------------------------ which branch
+# The index answers a NAME with the match nearest the bias point, and the bias is the statement's town: every
+# branch of a chain in his city landed on the one nearest downtown (real data 2026-09-18: 14 chains, 2-3 ZIPs each on
+# one pin; a shop in his own plaza drawn 5.6 km away). The statement also names the STREET, and the index
+# holds that street's bus stops ("River Expressway & Elm Lane") - points along it. The branch on that street
+# is the branch; places already pinned in the same ZIP by a real stop referee a mistyped street ("RIVRE EXPY").
+SAME_PLACE_KM = 0.3         # index entries this close together are one place mapped twice (a node and its building)
+STREET_KM = 0.8             # a branch this close to a stop on the statement's street is the one on that street
+ZIP_KM = 5.0                # a branch farther than this from everything stop-matched in its ZIP is another ZIP's
+_STREET_WORD = {"EXPY": "expressway", "AVE": "avenue", "AV": "avenue", "BLVD": "boulevard", "BVD": "boulevard", "RD": "road",
+                "LN": "lane", "ST": "street", "DR": "drive", "HWY": "highway", "PKWY": "parkway", "PKY": "parkway", "CT": "court",
+                "PL": "place", "CIR": "circle", "TER": "terrace", "SQ": "square"}
+_COMPASS = frozenset("N S E W NE NW SE SW".split())
+_TAIL = re.compile(r"\s*\d{5}(?:-\d{4})?\s*[A-Z]{2}\s+(?:USA?|US)\s*$")
+
+
+def street_of(description, town):
+    """'CORNER MART 14290 1421 ELM LN SPRINGFIELD 12345 XX USA', 'Springfield' -> ['elm', 'lane'] - the words to look
+    the street up by, abbreviations spelled out, a truncated last word left as the prefix it is. None if unreadable."""
+    head = _TAIL.sub("", re.sub(r"\s*\((?:RETURN|REVERSAL)\)\s*$", "", (description or "").upper().strip()))
+    t = (town or "").upper().strip()
+    if not t or not head.endswith(t):
+        return None
+    # the leftmost number a street follows ("14290 1421 ELM LN": the first is the store's); a suite may trail it
+    m = re.search(r"\S*\d\S*\s+((?:[A-Z][A-Z.'&-]*\s?)+?)\s*(?:,.*|#.*|(?<=\s)(?:STE|SUITE|BLDG|UNIT|FLOOR)\b.*)?$", head[:-len(t)].strip())
+    if not m:
+        return None
+    words = [w.strip(".'") for w in m.group(1).split()]
+    words = [w for w in words if w and w not in _COMPASS]
+    if not words or (len(words) == 1 and words[0] in _STREET_WORD):
+        return None
+    return [_STREET_WORD.get(w, w).lower() if i else w.lower() for i, w in enumerate(words)]
+
+
+def pick_branch(cands, anchors, zip_anchor=None):
+    """cands [(lat, lon, label)] - every branch of the name in the statement's town; anchors [(lat, lon)] - points on
+    the statement's street; zip_anchor - the middle of what is already stop-matched in that ZIP. -> the branch;
+    None when there is one place to choose from (the ordinary lookup stands); False when there are several and
+    nothing says which - the town, marked approximate, is honest and the branch nearest downtown is a coin toss."""
+    if len(cands) < 2 or all(km(c[:2], cands[0][:2]) <= SAME_PLACE_KM for c in cands):
+        return None
+    pool = cands
+    if zip_anchor:
+        pool = [c for c in cands if km(c[:2], zip_anchor) <= ZIP_KM] or cands
+    if anchors:
+        off = lambda c: min(km(c[:2], a) for a in anchors)
+        best = min(pool, key=off)
+        if off(best) <= STREET_KM:
+            return best
+    if zip_anchor and len(pool) < len(cands):
+        return min(pool, key=lambda c: km(c[:2], zip_anchor))
+    return False
+
+
 # words any place might carry: they say nothing about WHICH place the index found
 GENERIC = frozenset("and the of by at restaurant bar grill cafe store shop market company inc llc "
                     "hardware pharmacy supermarket".split())
@@ -159,7 +221,7 @@ def solid(merchant, resolved):
     """Did the index really find THIS merchant? Every telling word of the found name must be in the
     merchant's own (a found word may run on past the merchant's last one: Apple truncates, "Brewing Com"),
     or the found name must start with the whole merchant ("Baskin" -> Baskin-Robbins). Matching the
-    leading word alone put an auto repair shop at "Metro City Restaurant" and a dentist at "Orchid Cleaners"."""
+    leading word alone put an auto repair shop at "Metro City Restaurant" and a dentist at a dry cleaner sharing its first word."""
     words = lambda x: re.sub(r"[^a-z0-9]+", " ", (x or "").lower().replace("'", "").replace("’", "")).split()
     m = words(re.sub(r"[*#].*$", "", merchant or ""))
     r = words((resolved or "").split(",")[0])              # "Chevron, Springfield": the town is the index's, not the name
@@ -506,19 +568,24 @@ def hour_weekday(rows):
 
 
 def places(rows):
-    """Purchases with a merchant position -> one dot per place, with the days money was spent there."""
+    """Purchases with a merchant position -> one dot per place, with the days money was spent there
+    and the smallest / mean / largest single purchase."""
     by = {}
     for r in rows:
         k = (round(r["merchant_lat"], 4), round(r["merchant_lon"], 4))
         p = by.setdefault(k, {"lat": r["merchant_lat"], "lon": r["merchant_lon"], "name": r.get("merchant_place") or r["merchant"],
-                              "spent": 0.0, "visits": 0, "merchants": {}, "dates": set()})
+                              "spent": 0.0, "visits": 0, "merchants": {}, "dates": set(),
+                              "smallest": r["amount"], "largest": r["amount"]})
         p["spent"] += r["amount"]
         p["visits"] += 1
+        p["smallest"] = min(p["smallest"], r["amount"])
+        p["largest"] = max(p["largest"], r["amount"])
         p["merchants"][r["merchant"]] = p["merchants"].get(r["merchant"], 0) + 1
         if r.get("date"):
             p["dates"].add(r["date"])
     out = []
     for p in by.values():
+        p["mean"] = round(p["spent"] / p["visits"], 2)
         p["spent"] = round(p["spent"], 2)
         p["merchants"] = sorted(p["merchants"], key=lambda m: -p["merchants"][m])[:4]
         p["dates"] = sorted(p["dates"])
@@ -682,7 +749,7 @@ def _city_lookup():
     if not p.exists():
         return lambda description, bias: None
     con = sqlite3.connect("file:%s?mode=ro" % p, uri=True, timeout=10, check_same_thread=False)
-    rx = re.compile(r"((?:[A-Z][A-Z.'-]*\s+){1,3})\d{5}\s+[A-Z]{2}\s+(?:USA?|US)\s*$")
+    rx = re.compile(r"((?:[A-Z][A-Z.'-]*\s+){0,2}[A-Z][A-Z.'-]*)\s*\d{5}(?:-\d{4})?\s*[A-Z]{2}\s+(?:USA?|US)\s*$")
     radius = {"place:city": 16.0, "place:town": 8.0, "place:suburb": 6.0, "place:village": 5.0}
     cache = {}
 
@@ -700,6 +767,55 @@ def _city_lookup():
             if cache[name]:
                 return cache[name]
         return None
+    return look
+
+
+def _branch_lookup():
+    """(merchant, description, city) -> (cands, anchors) for pick_branch(), read straight from the geocoder's index.
+    `city` is _city_lookup()'s answer: (lat, lon, radius_km, name)."""
+    p = POLARIS / "geo.sqlite"
+    if not p.exists():
+        return lambda merchant, description, city: ([], [])
+    con = sqlite3.connect("file:%s?mode=ro" % p, uri=True, timeout=10, check_same_thread=False)
+    norm = lambda x: re.sub(r"[^a-z0-9]+", " ", (x or "").lower().replace("'", "").replace("\u2019", "")).split()
+
+    def rows(terms, city):
+        w = city[2] / 111.0 + 0.02
+        try:
+            return con.execute("SELECT g.name, g.city, g.kind, g.lat, g.lon FROM geo_fts f JOIN geo g ON g.id = f.rowid WHERE geo_fts MATCH ? "
+                               "AND g.lat BETWEEN ? AND ? AND g.lon BETWEEN ? AND ? LIMIT 600",
+                               (" ".join('"%s"*' % t for t in terms), city[0] - w, city[0] + w, city[1] - w * 1.3, city[1] + w * 1.3)).fetchall()
+        except sqlite3.Error:
+            return []
+
+    memo = {}
+
+    def look(merchant, description, city):
+        key = (merchant, description, city[3])
+        if key not in memo:             # one answer per branch, not per visit to it
+            memo[key] = find(merchant, description, city)
+        return memo[key]
+
+    def find(merchant, description, city):
+        cands, seen = [], set()
+        for v in name_variants(merchant):
+            for name, town, kind, la, lo in rows(norm(v), city) if norm(v) else []:
+                label = name if not town or " ".join(norm(town)) in " ".join(norm(name)) else "%s, %s" % (name, town)
+                if (round(la, 4), round(lo, 4)) in seen or (kind or "").startswith(NOT_A_SHOP) or not solid(merchant, label):
+                    continue
+                if km((la, lo), (city[0], city[1])) <= city[2]:
+                    seen.add((round(la, 4), round(lo, 4)))
+                    cands.append((la, lo, label))
+            if cands:
+                break                   # the fullest name that resolves is the one to trust
+        street = street_of(description, city[3]) if len(cands) > 1 else None
+        anchors = []
+        if street:
+            for name, _, _, la, lo in rows(street, city):
+                words = norm(name)
+                if all(any(w.startswith(t) for w in words) for t in street):       # the name's own words, not the city column
+                    anchors.append((la, lo))
+        return cands, anchors
     return look
 
 
@@ -778,7 +894,11 @@ def build(verbose=True):
     if "kind" not in set(r[1] for r in conn.execute("PRAGMA table_info(merchant_geo)")):
         conn.execute("ALTER TABLE merchant_geo ADD COLUMN kind TEXT")
     aliases = dict((r["raw"], r["alias"]) for r in conn.execute("SELECT raw, alias FROM merchant_alias"))
-    rows = lc.prepare([dict(r) for r in conn.execute("SELECT * FROM transactions")], aliases)
+    try:
+        overrides = dict((r["uid"], r["category"]) for r in conn.execute("SELECT uid, category FROM enrich WHERE category IS NOT NULL"))
+    except sqlite3.Error:
+        overrides = {}
+    rows = lc.prepare([dict(r) for r in conn.execute("SELECT * FROM transactions")], aliases, overrides)
     purchases = [r for r in rows if r["_k"] == "purchase"]
     today = datetime.now().date()
     billed = set(u for s in lc.recurring(rows, today) for u in s["uids"])
@@ -853,16 +973,34 @@ def build(verbose=True):
             continue
     city_of = _city_lookup()
     kind_of = _kind_lookup()
+    branch_of = _branch_lookup()
+    in_zip, states = {}, {}
+    for g in known.values():            # what a real stop already pinned, by ZIP: the referee for a branch
+        if g.get("source") == "stop-match" and g.get("lat") is not None:
+            in_zip.setdefault(g["zip"], []).append((g["lat"], g["lon"]))
+    for m in out.values():
+        if m["channel"] == "in_person" and m["_hint"]:
+            states[m["_hint"]["state"]] = states.get(m["_hint"]["state"], 0) + 1
+    # The index is one state's map. A line from another state can only resolve to a namesake: a firm in a Springfield
+    # two thousand miles away was pinned to the Springfield in his own state. Those stay unplaced.
+    home_state = max(sorted(states), key=states.get) if states else None
     for uid, m in out.items():
         r, hint = m["_row"], m["_hint"]
         if m["channel"] != "in_person" or "merchant_lat" in m or not hint:
             continue
         k = (r["_m"], hint["zip"])
         if geocode and home and (k not in known or known[k].get("source") in ("name", "unresolved", "city-area")):
-            city = city_of(r.get("description"), home)
+            away = hint["state"] != home_state
+            city = None if away else city_of(r.get("description"), home)
             merchant = r.get("merchant") or r["_m"]
             g = None
-            for bias in ([(city[0], city[1])] if city else []) + [home]:      # look where the statement says first
+            if city:
+                b = pick_branch(*branch_of(merchant, r.get("description"), city), zip_anchor=center(in_zip.get(hint["zip"]) or []))
+                if b:
+                    g = {"lat": b[0], "lon": b[1], "name": b[2]}
+            else:
+                b = None
+            for bias in [] if g or b is False or away else ([(city[0], city[1])] if city else []) + [home]:      # look where the statement says first
                 for v in name_variants(merchant):
                     c = geocode(v, bias)
                     # near is not enough: a namesake next door is still the wrong place (the town pin is honest)
@@ -893,6 +1031,10 @@ def build(verbose=True):
               m.get("merchant_lon"), m.get("merchant_place"), m.get("geo_source"), m.get("david_lat"), m.get("david_lon"),
               m.get("david_place"), json.dumps(m["evidence"]) if m.get("evidence") else None, now) for uid, m in out.items()])
         names = dict((r["_m"], r.get("merchant") or r["_m"]) for r in purchases)
+        live = set((m["_row"]["_m"], m["_hint"]["zip"]) for m in out.values() if m["channel"] == "in_person" and m["_hint"])
+        for k in [k for k, g in known.items() if k not in live and g.get("source") in ("name", "city-area", "unresolved")]:
+            conn.execute("DELETE FROM merchant_geo WHERE mkey = ? AND zip = ?", k)      # a web order once read as a shop visit: its pin must not outlive the mistake
+            del known[k]
         for g in known.values():
             kind = None
             if g.get("lat") is not None and solid(names.get(g["mkey"], g["mkey"]), g.get("resolved")):
