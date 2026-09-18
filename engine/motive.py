@@ -29,7 +29,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import ledger_core as lc
@@ -147,13 +147,30 @@ def match_day(purchases, stops, geocode):
     return out
 
 
+# words any place might carry: they say nothing about WHICH place the index found
+GENERIC = frozenset("and the of by at restaurant bar grill cafe store shop market company inc llc "
+                    "hardware pharmacy supermarket".split())
+# the index holds these, but nobody pays at a bus stop or a post box
+NOT_A_SHOP = ("public_transport:", "highway:", "railway:", "place:", "natural:", "building:", "amenity:post_box",
+              "amenity:bench", "amenity:parking", "leisure:park", "leisure:dog_park", "leisure:playground")
+
+
 def solid(merchant, resolved):
-    """Did the index really find THIS merchant? True when the resolved name carries the
-    merchant's leading word. Guards the map's place-kind: a loose match once called a
-    storage unit a hairdresser and an auto shop a town hall."""
-    norm = lambda x: re.sub(r"[^a-z0-9 ]", "", (x or "").lower().replace("'", ""))
-    words = [w for w in norm(name_variants(merchant)[-1] if name_variants(merchant) else "").split() if len(w) >= 3]
-    return bool(words) and words[0] in norm(resolved).split()
+    """Did the index really find THIS merchant? Every telling word of the found name must be in the
+    merchant's own (a found word may run on past the merchant's last one: Apple truncates, "Brewing Com"),
+    or the found name must start with the whole merchant ("Baskin" -> Baskin-Robbins). Matching the
+    leading word alone put an auto repair shop at "Metro City Restaurant" and a dentist at "Orchid Cleaners"."""
+    words = lambda x: re.sub(r"[^a-z0-9]+", " ", (x or "").lower().replace("'", "").replace("’", "")).split()
+    m = words(re.sub(r"[*#].*$", "", merchant or ""))
+    r = words((resolved or "").split(",")[0])              # "Chevron, Springfield": the town is the index's, not the name
+    if not m or not r:
+        return False
+    mc, rc = "".join(m), "".join(r)
+    if len(mc) >= 6 and rc.startswith(mc):
+        return True
+    telling = [w for w in r if len(w) >= 3 and w not in GENERIC]
+    return (bool(telling) and m[0] in rc
+            and all(w in mc or (len(m[-1]) >= 3 and w.startswith(m[-1])) for w in telling))
 
 
 # ------------------------------------------------------------------ tap pairing
@@ -489,19 +506,22 @@ def hour_weekday(rows):
 
 
 def places(rows):
-    """Purchases with a merchant position -> one dot per place."""
+    """Purchases with a merchant position -> one dot per place, with the days money was spent there."""
     by = {}
     for r in rows:
         k = (round(r["merchant_lat"], 4), round(r["merchant_lon"], 4))
         p = by.setdefault(k, {"lat": r["merchant_lat"], "lon": r["merchant_lon"], "name": r.get("merchant_place") or r["merchant"],
-                              "spent": 0.0, "visits": 0, "merchants": {}})
+                              "spent": 0.0, "visits": 0, "merchants": {}, "dates": set()})
         p["spent"] += r["amount"]
         p["visits"] += 1
         p["merchants"][r["merchant"]] = p["merchants"].get(r["merchant"], 0) + 1
+        if r.get("date"):
+            p["dates"].add(r["date"])
     out = []
     for p in by.values():
         p["spent"] = round(p["spent"], 2)
         p["merchants"] = sorted(p["merchants"], key=lambda m: -p["merchants"][m])[:4]
+        p["dates"] = sorted(p["dates"])
         out.append(p)
     out.sort(key=lambda p: -p["spent"])
     return out
@@ -523,13 +543,16 @@ FEATURES = (
     ("drive_miles", "Miles driven"),
 )
 MIN_BUCKET = 8              # nothing is stated about a bucket of fewer days than this
+ENOUGH_DAYS = 60            # fewer days behind a signal than this and the page files it under "too early to tell"
+BOOTS = 1000                # resamples behind each difference's 90% range
 ONE_OFF = 200.0
 
 
 def day_spend(rows, billed):
-    """{date: {'spend', 'count'}} for every calendar day the statement covers - days with no
-    purchase are real zeros. Only what the owner DECIDES that day: no bills, no billed
-    subscriptions, no one-off big-ticket items (a dental crown is not a mood)."""
+    """{date: {'spend', 'count'}} for every calendar day the statements cover - days with no
+    purchase are real zeros, days inside a data gap (lc.coverage) are not days at all.
+    Only what the owner DECIDES that day: no bills, no billed subscriptions, no one-off
+    big-ticket items (a dental crown is not a mood)."""
     purchases = [r for r in rows if r["_k"] == "purchase"]
     if not purchases:
         return {}
@@ -537,11 +560,15 @@ def day_spend(rows, billed):
     for r in purchases:
         typical.setdefault(r["_cat"], []).append(r["amount"])
     typical = dict((c, sorted(v)[len(v) // 2]) for c, v in typical.items())
-    out, dd = {}, purchases[0]["_d"]
-    while dd <= purchases[-1]["_d"]:
-        out[dd.isoformat()] = {"spend": 0.0, "count": 0}
-        dd += __import__("datetime").timedelta(days=1)
+    out, one = {}, __import__("datetime").timedelta(days=1)
+    for a, b in lc.coverage(rows):
+        dd = max(a, purchases[0]["_d"])
+        while dd <= min(b, purchases[-1]["_d"]):
+            out[dd.isoformat()] = {"spend": 0.0, "count": 0}
+            dd += one
     for r in purchases:
+        if r["date"] not in out:
+            continue
         if (r["_cat"] in lc.NOT_A_LEVER or r.get("uid") in billed
                 or (r["amount"] >= ONE_OFF and r["amount"] > 4 * typical[r["_cat"]])):
             continue
@@ -565,9 +592,12 @@ def drivers(spend_by_day, features_by_day, shuffles=2000, seed=1):
     """For each signal: spending on the days it ran HIGH against the days it ran LOW (split
     at the owner's own median), with a permutation test. A day missing the signal is left
     out of that signal - absent is never zero. Returns every signal tested, ordered by
-    how hard the difference is to get by chance; the caller must show n and p."""
+    how hard the difference is to get by chance; the caller must show n and p.
+    `range_lo`..`range_hi` is a 90% bootstrap range for the difference: a range that
+    crosses zero is the plain-words way to say "could be chance"."""
     import random
     rnd = random.Random(seed)
+    brnd = random.Random(seed + 1)          # its own stream: adding the range must not move any p
     out = []
     for key, label in FEATURES:
         pts = [(features_by_day[d][key], spend_by_day[d]["spend"], spend_by_day[d]["count"])
@@ -583,7 +613,14 @@ def drivers(spend_by_day, features_by_day, shuffles=2000, seed=1):
         ml, mh = sum(x[1] for x in lo) / len(lo), sum(x[1] for x in hi) / len(hi)
         p = _perm_p([x[1] for x in hi], [x[1] for x in lo], shuffles, rnd)
         days_ = sorted(d for d in spend_by_day if d in features_by_day and features_by_day[d].get(key) is not None)
+        hv, lv, diffs = [x[1] for x in hi], [x[1] for x in lo], []
+        for _ in range(BOOTS):
+            a, b = brnd.choices(hv, k=len(hv)), brnd.choices(lv, k=len(lv))
+            diffs.append(sum(a) / len(a) - sum(b) / len(b))
+        diffs.sort()
         out.append({"key": key, "label": label, "split_at": med, "n_low": len(lo), "n_high": len(hi),
+                    "range_lo": round(diffs[int(BOOTS * .05)], 2), "range_hi": round(diffs[int(BOOTS * .95) - 1], 2),
+                    "enough": len(pts) >= ENOUGH_DAYS, "enough_days": ENOUGH_DAYS,
                     "spend_low": round(ml, 2), "spend_high": round(mh, 2), "diff": round(mh - ml, 2),
                     "count_low": round(sum(x[2] for x in lo) / float(len(lo)), 2),
                     "count_high": round(sum(x[2] for x in hi) / float(len(hi)), 2),
@@ -638,7 +675,7 @@ def _geo():
 
 
 def _city_lookup():
-    """description -> (lat, lon, radius_km, name) of the town the STATEMENT names ("... CAMPBELL 95008 CA USA"),
+    """description -> (lat, lon, radius_km, name) of the town the STATEMENT names ("... SPRINGFIELD 12345 XX USA"),
     or None. The geocoder indexes names, so a merchant can resolve to a namesake 33 km away (the cafe:
     the home town on the statement, the next town in the index). The statement's town is the referee."""
     p = POLARIS / "geo.sqlite"
@@ -815,6 +852,7 @@ def build(verbose=True):
                                                   "lon": m["merchant_lon"], "resolved": m["merchant_place"], "source": "stop-match"}
             continue
     city_of = _city_lookup()
+    kind_of = _kind_lookup()
     for uid, m in out.items():
         r, hint = m["_row"], m["_hint"]
         if m["channel"] != "in_person" or "merchant_lat" in m or not hint:
@@ -822,10 +860,14 @@ def build(verbose=True):
         k = (r["_m"], hint["zip"])
         if geocode and home and (k not in known or known[k].get("source") in ("name", "unresolved", "city-area")):
             city = city_of(r.get("description"), home)
+            merchant = r.get("merchant") or r["_m"]
             g = None
             for bias in ([(city[0], city[1])] if city else []) + [home]:      # look where the statement says first
-                for v in name_variants(r.get("merchant") or r["_m"]):
+                for v in name_variants(merchant):
                     c = geocode(v, bias)
+                    # near is not enough: a namesake next door is still the wrong place (the town pin is honest)
+                    if c and (not solid(merchant, c["name"]) or (kind_of(c["lat"], c["lon"]) or "").startswith(NOT_A_SHOP)):
+                        continue
                     if c and (km((c["lat"], c["lon"]), (city[0], city[1])) <= city[2] if city else km((c["lat"], c["lon"]), home) <= LOCAL_KM):
                         g = c
                         break
@@ -850,7 +892,6 @@ def build(verbose=True):
             [(uid, m["channel"], m.get("ts"), m.get("ts_lo"), m.get("ts_hi"), m.get("time_source"), m.get("merchant_lat"),
               m.get("merchant_lon"), m.get("merchant_place"), m.get("geo_source"), m.get("david_lat"), m.get("david_lon"),
               m.get("david_place"), json.dumps(m["evidence"]) if m.get("evidence") else None, now) for uid, m in out.items()])
-        kind_of = _kind_lookup()
         names = dict((r["_m"], r.get("merchant") or r["_m"]) for r in purchases)
         for g in known.values():
             kind = None
@@ -889,7 +930,8 @@ def build(verbose=True):
     stress = sorted(f["stress_score"] for f in feats.values() if f.get("stress_score") is not None)
     sleep_med = sleeps[len(sleeps) // 2] if len(sleeps) >= 8 else None
     stress_hi = stress[int(len(stress) * .75)] if len(stress) >= 8 else None
-    start = purchases[0]["_d"] if purchases else today
+    cov = lc.coverage(rows)
+    seen_before = lambda d: lc.covered_days(cov, d - timedelta(days=60), d) >= 60    # 60 OBSERVED days before it, not a gap
     calls = []
     for uid, m in out.items():
         r = m["_row"]
@@ -897,7 +939,7 @@ def build(verbose=True):
         n, t = len(by_m[r["_m"]]), typical[r["_m"]]
         facts = dict(c, category=r["_cat"], amount=r["amount"], channel=m["channel"], habit=r["_m"] in habit_keys,
                      merchant_count=n, typical=t, usual_amount=bool(n >= 4 and t and abs(r["amount"] - t) <= 0.25 * t),
-                     first_time=bool(first_seen[r["_m"]] is r and (r["_d"] - start).days >= 60))
+                     first_time=bool(first_seen[r["_m"]] is r and seen_before(r["_d"])))
         if m.get("ts"):
             h = datetime.fromtimestamp(m["ts"])
             hs = hours.get(r["_m"], [])

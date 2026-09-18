@@ -26,6 +26,7 @@ DUPLICATE_MIN = 5.0
 FIRST_TIME_MIN = 25.0
 FIRST_TIME_HISTORY_DAYS = 60
 FLAG_WINDOW_DAYS = 45       # only recent rows raise flags; history is the baseline
+COVERAGE_GAP_DAYS = 21      # longer than this with no transaction of ANY kind = a gap in the data (coverage())
 REFUND_MATCH_DAYS = 120
 
 # Why a purchase happened. Spending is the fleet's clearest record of intent
@@ -220,6 +221,55 @@ def _in(rows, since, until):
     return [r for r in rows if since <= r["_d"] <= until]
 
 
+def coverage(rows, today=None):
+    """[(first, last)] - the days the imported statements actually observe. Three weeks with NOTHING on the
+    card, not a coffee and not a bill, means it was not in use or that range was never exported: those days
+    are unobserved, never zero spending. Real data 2026-09-18: nothing at all 2025-01-18 .. 2025-12-30
+    between two exports. With `today`, the last span runs on to it (the next statement is simply not in yet)
+    unless the data has gone quiet longer than the gap itself."""
+    ds = sorted(set(r["_d"] for r in rows))
+    if not ds:
+        return []
+    spans, a, b = [], ds[0], ds[0]
+    for x in ds[1:]:
+        if (x - b).days > COVERAGE_GAP_DAYS:
+            spans.append((a, b))
+            a = x
+        b = x
+    if today is not None and 0 <= (today - b).days <= COVERAGE_GAP_DAYS:
+        b = today
+    spans.append((a, b))
+    return spans
+
+
+def covered_days(spans, since, until):
+    """How many days in [since, until) fall inside a covered span - the honest divisor for a rate."""
+    n = 0
+    for a, b in spans:
+        lo, hi = max(a, since), min(b + timedelta(days=1), until)
+        if hi > lo:
+            n += (hi - lo).days
+    return n
+
+
+def is_covered(spans, day):
+    return any(a <= day <= b for a, b in spans)
+
+
+def full_months(spans):
+    """'YYYY-MM' months every day of which is covered - a month at the edge of a gap is a fragment."""
+    out = []
+    for a, b in spans:
+        y, m = a.year, a.month
+        while (y, m) <= (b.year, b.month):
+            ym = "%04d-%02d" % (y, m)
+            s, e = month_bounds(ym)
+            if a <= s and e <= b:
+                out.append(ym)
+            y, m = (y, m + 1) if m < 12 else (y + 1, 1)
+    return out
+
+
 def totals(rows):
     spent = sum(r["amount"] for r in rows if r["_k"] == "purchase")
     refunded = -sum(r["amount"] for r in rows if r["_k"] == "refund")
@@ -354,7 +404,7 @@ def habits(rows, today, days=90):
     for r in rows:
         if r["_k"] == "purchase" and r["_d"] >= since:
             by_m.setdefault(r["_m"], []).append(r)
-    span = max(1, min(days, (today - rows[0]["_d"]).days)) if rows else days
+    span = max(1, covered_days(coverage(rows, today), since, today)) if rows else days
     out = []
     for m, rs in by_m.items():
         dates = sorted(set(r["_d"] for r in rs))
@@ -420,7 +470,7 @@ def pace(rows, today, series=None):
     everyday_mtd = sum(r["amount"] for r in _in(rows, start, today)
                        if r["_k"] == "purchase" and r.get("uid") not in rec_uids)
     t90 = _in(rows, today - timedelta(days=90), today - timedelta(days=1))
-    span = max(1, min(90, (today - rows[0]["_d"]).days)) if rows else 1
+    span = max(1, covered_days(coverage(rows, today), today - timedelta(days=90), today)) if rows else 1
     everyday_90 = sum(r["amount"] for r in t90
                       if r["_k"] == "purchase" and r.get("uid") not in rec_uids) / float(span)
     w = elapsed / float(days_in)
@@ -474,12 +524,18 @@ def by_category(rows, since, until):
 
 
 def category_trend(rows):
-    """{months: [...], series: [{category, values:[...]}]} net of refunds."""
+    """{months: [...], series: [{category, values:[...]}]} net of refunds. Whole months only, plus the latest
+    (the month in progress): a fragment at the edge of a data gap would chart as a month he barely spent."""
     months, table = [], {}
+    keep = set(full_months(coverage(rows)))
+    if rows:
+        keep.add(rows[-1]["date"][:7])
     for r in rows:
         if r["_k"] not in ("purchase", "refund"):
             continue
         ym = r["date"][:7]
+        if ym not in keep:
+            continue
         if ym not in months:
             months.append(ym)
         table.setdefault(r["_cat"], {})
@@ -771,7 +827,8 @@ def levers(rows, today, series, habit_list, plan=None):
     typical = dict((c, statistics.median(v)) for c, v in typical.items())
     rest = [r for r in rest if not (r["amount"] >= 200 and r["amount"] > 4 * typical[r["_cat"]])]
     this_month, since90 = today.strftime("%Y-%m"), today - timedelta(days=90)
-    span = max(30, min(90, (today - rows[0]["_d"]).days)) if rows else 90
+    cov = coverage(rows, today)
+    span = max(30, covered_days(cov, since90, today)) if rows else 90
     months, recent, count = {}, {}, {}
     for r in rest:
         if r["date"][:7] != this_month:
@@ -780,7 +837,8 @@ def levers(rows, today, series, habit_list, plan=None):
         if r["_d"] > since90:
             recent[r["_cat"]] = recent.get(r["_cat"], 0.0) + r["amount"]
             count[r["_cat"]] = count.get(r["_cat"], 0) + 1
-    full = sorted(set(r["date"][:7] for r in purchases if r["date"][:7] != this_month))
+    whole = set(full_months(cov))           # a "usual month" is a whole one - not the two days before a gap
+    full = sorted(set(r["date"][:7] for r in purchases if r["date"][:7] != this_month and r["date"][:7] in whole))
     for cat, total in sorted(recent.items(), key=lambda kv: -kv[1])[:8]:
         amt = total * 30.0 / span
         if amt < 20 or count[cat] < 3:
@@ -1028,7 +1086,7 @@ def say_whatif(rows, today, series, target, change=None, days=90):
         return "Nothing in LEDGER matches '%s'. Try a category (coffee, eating out, groceries, gas, amazon, tobacco) or a merchant name.%s" % (target, _caveat(rows, today))
     since = today - timedelta(days=days)
     recent = [r for r in sel if r["_d"] >= since]
-    span = max(14, min(days, (today - rows[0]["_d"]).days))
+    span = max(14, covered_days(coverage(rows, today), since, today))
     if not recent:
         last = sel[-1]
         return "%s: nothing in the last %d days (last was %s, %s). Nothing to save at the current rate.%s" % (label, days, last["date"], money(last["amount"]), _caveat(rows, today))
@@ -1076,10 +1134,10 @@ def say_pattern(rows, today, timed, weekday=None, hour=None):
     out = []
     if wd is not None:
         sel = [r for r in purchases if r["_d"].weekday() == wd]
-        days_all = set()
+        days_all, cov = set(), coverage(rows, today)
         dd = purchases[0]["_d"]
         while dd <= today:
-            if dd.weekday() == wd:
+            if dd.weekday() == wd and is_covered(cov, dd):     # a Tuesday inside a data gap is not a Tuesday he skipped
                 days_all.add(dd)
             dd += timedelta(days=1)
         active = set(r["_d"] for r in sel)
@@ -1286,7 +1344,7 @@ def buildable(rows, today, series):
         text = ("%s %s" % (r.get("merchant") or "", r.get("description") or "")).upper()
         if not (r["_cat"] in BUILDABLE or r.get("uid") in billed or BUILDABLE_NAMES.search(text)):
             continue
-        b = by.setdefault(r["_m"], {"merchant": r.get("merchant") or r["_m"], "category": r["_cat"], "spent": 0.0, "charges": 0,
+        b = by.setdefault(r["_m"], {"key": r["_m"], "merchant": r.get("merchant") or r["_m"], "category": r["_cat"], "spent": 0.0, "charges": 0,
                                     "last": r["date"], "cadence": None, "active": False})
         b["spent"] += r["amount"]
         b["charges"] += 1
@@ -1294,7 +1352,7 @@ def buildable(rows, today, series):
         s_ = billed.get(r.get("uid"))
         if s_:
             b["cadence"], b["active"] = s_["cadence"], b["active"] or s_["status"] == "active"
-    span = max(30, min(365, (today - rows[0]["_d"]).days)) if rows else 365
+    span = max(30, covered_days(coverage(rows, today), since, today)) if rows else 365   # a year back crosses the 2025 gap
     out = []
     for b in by.values():
         b["spent"] = round(b["spent"], 2)
