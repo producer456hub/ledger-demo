@@ -92,16 +92,16 @@ def ask_demo(question, raw=False):
         return {"ok": True, "answer": "\n".join(lines), "loading": False}
     if not q:
         ans = "Ask something - a merchant, a category, a what-if, a weekday."
-    elif re.search(r"\bplan\b|levers?|chosen|cut[- ]?spending|where could the money come|where can i save", ql):
+    elif re.search(r"what if|\bstop|\bquit|\bcut (back|down|out|my|the|spending on)|cancel|halv|\bhalf\b|instead of (going|paying)|fewer|\bless\b|one fewer", ql):
+        target = re.sub(r"^.*?\b(if i|i)\s+(stopped|stop|quit|cut( back on| down on| spending on| out)?|cancell?ed|cancel|halved|halve|gave up|give up|dropped|drop)\s*", "", ql)
+        target = re.sub(r"\?+$", "", target).strip() or ql
+        ans = lc.say_whatif(rows, today, D.series, target, change=ql)      # a what-if wins over the plan reading: "what if I cut spending on coffee?"
+    elif re.search(r"\bplan\b|\blevers?\b|\bchosen\b|where could the money come|where can i save", ql):
         ans = lc.say_plan(D.cut, rows, today)                # what Marcus's spending_plan tool reads
-    elif re.search(r"\bbuild\b|replace .*(code|software)|write (it )?myself|software (do )?i pay|instead of buy", ql):
-        ans = lc.say_buildable(lc.buildable(rows, today, D.series), rows, today)     # spending_buildable
+    elif re.search(r"\b(could|can|should|would) i build\b|\bbuild (it )?myself\b|\bbuild instead\b|\binstead of buy|software (do )?i pay|replace .*with (code|software)", ql):
+        ans = lc.say_buildable(lc.buildable(rows, today, D.series), rows, today)     # spending_buildable; a merchant called Build-A-Bear still goes to search
     elif re.search(r"subscri|recurring|repeat|paying for|\bbills?\b|memberships?", ql):
         ans = lc.say_recurring(D.series, rows, today, D.habits)
-    elif re.search(r"what if|\bstop|\bquit|\bcut\b|cancel|halv|\bhalf\b|instead of|fewer|\bless\b|one fewer", ql):
-        target = re.sub(r"^.*?\b(if i|i)\s+(stopped|stop|quit|cut( back on| down on)?|cancell?ed|cancel|halved|halve|gave up|give up|dropped|drop)\s*", "", ql)
-        target = re.sub(r"\?+$", "", target).strip() or ql
-        ans = lc.say_whatif(rows, today, D.series, target, change=ql)
     elif re.search(_DAYS, ql) or re.search(r"weekend|\d\s*(am|pm)\b|morning|afternoon|evening|night", ql):
         m = re.search(_DAYS, ql)
         wd = next((w for w in lc.WEEKDAYS if w.startswith(m.group(1)[:3])), None) if m else None
