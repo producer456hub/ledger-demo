@@ -92,6 +92,10 @@ def ask_demo(question, raw=False):
         return {"ok": True, "answer": "\n".join(lines), "loading": False}
     if not q:
         ans = "Ask something - a merchant, a category, a what-if, a weekday."
+    elif re.search(r"\bplan\b|levers?|chosen|cut[- ]?spending|where could the money come|where can i save", ql):
+        ans = lc.say_plan(D.cut, rows, today)                # what Marcus's spending_plan tool reads
+    elif re.search(r"\bbuild\b|replace .*(code|software)|write (it )?myself|software (do )?i pay|instead of buy", ql):
+        ans = lc.say_buildable(lc.buildable(rows, today, D.series), rows, today)     # spending_buildable
     elif re.search(r"subscri|recurring|repeat|paying for|\bbills?\b|memberships?", ql):
         ans = lc.say_recurring(D.series, rows, today, D.habits)
     elif re.search(r"what if|\bstop|\bquit|\bcut\b|cancel|halv|\bhalf\b|instead of|fewer|\bless\b|one fewer", ql):

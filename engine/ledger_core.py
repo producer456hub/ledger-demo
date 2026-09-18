@@ -1133,6 +1133,57 @@ NUDGE_KINDS = (
 NUDGE_KEYS = tuple(k for k, _, _ in NUDGE_KINDS)
 
 
+def say_plan(cut, rows, today):
+    """The cut-spending plan in plain words - what the owner has chosen on the page, what it saves, and the
+    ideas still on the table. For Marcus (spending_plan): the page stays the place to CHANGE it."""
+    if not rows:
+        return "LEDGER has no transactions yet."
+    levers_ = cut.get("levers") or []
+    if not levers_:
+        return "LEDGER has no levers yet - it needs a few months of purchases to find habits, subscriptions and steerable categories."
+    chosen = [l for l in levers_ if l.get("chosen") is not None]
+    per = {"weekly": "week", "biweekly": "2 weeks", "monthly": "month", "quarterly": "quarter", "yearly": "year"}
+    out = "Yours to decide, a year: %s across %d levers (%d habits, %d subscriptions, %d categories)." % (
+        money(cut["discretionary_yearly"]), len(levers_), sum(1 for l in levers_ if l["kind"] == "habit"),
+        sum(1 for l in levers_ if l["kind"] == "subscription"), sum(1 for l in levers_ if l["kind"] == "category"))
+    if not chosen:
+        out += " Nothing chosen yet, so the plan saves nothing."
+    else:
+        parts = []
+        for l in chosen:
+            if l["kind"] == "habit":
+                how = "%s: %g a week instead of %g" % (l["title"], l["chosen"], l["now"])
+                if l.get("last7") is not None:
+                    how += " (last 7 days: %d, %s)" % (l["last7"], "on plan" if l.get("on_plan") else "over plan")
+            elif l["kind"] == "subscription":
+                how = "%s: %s" % (l["title"], "cancel" if l["chosen"] == 0 else "keep")
+                if l.get("still_charging"):
+                    how += " - still billing %s every %s" % (money(l["amount"]), per.get(l["cadence"], l["cadence"]))
+            else:
+                how = "%s: %s a month instead of %s" % (l["title"], money(l["chosen"]), money(l["now"]))
+            parts.append("%s = %s a year" % (how, money(l["saving_yearly"])))
+        out += " The plan saves %s a year (%s a month): %s." % (money(cut["plan_saving_yearly"]), money(cut["plan_saving_monthly"]), "; ".join(parts))
+    ideas = [i for i in (cut.get("ideas") or []) if not any(l["id"] == i["lever"] and l.get("chosen") is not None for l in levers_)]
+    if ideas:
+        out += " Still on the table: %s." % "; ".join("%s (%s a year)" % (i["text"], money(i["saves_yearly"])) for i in ideas[:4])
+    return out + " Change the plan on the LEDGER page; this is a reading of it." + _caveat(rows, today)
+
+
+def say_buildable(items, rows, today):
+    """What the owner pays a year for software, services and subscriptions, ranked - the list the page hands a
+    model to judge. For Marcus (spending_buildable): he IS that model, so the list is enough."""
+    if not rows:
+        return "LEDGER has no transactions yet."
+    if not items:
+        return "Nothing in the statement looks like software, a service or a subscription." + _caveat(rows, today)
+    lines = ["%s %s a year (%s, %d charge%s, last %s%s)" % (
+        b["merchant"], money(b["yearly"]), b["category"], b["charges"], "" if b["charges"] == 1 else "s", b["last"],
+        ", bills every %s" % b["cadence"].replace("ly", "") if b["cadence"] else "") for b in items[:18]]
+    total = sum(b["yearly"] for b in items)
+    return ("Software, services and subscriptions, a year, largest first: %s. Together %s a year across %d. "
+            "Exact figures from the statement - use only these." % ("; ".join(lines), money(total), len(items))) + _caveat(rows, today)
+
+
 def nudges(rows, now, series, cut, budgets, flag_list, stale):
     """Everything worth saying right now -> [{id, kind, text}]. Pure: no clock but `now`, no sending.
     Nothing is said on stale data - a nudge about "this week" built on a ten-day-old export would be a lie."""

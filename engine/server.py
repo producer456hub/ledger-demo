@@ -795,6 +795,10 @@ class H(BaseHTTPRequestHandler):
                     return self._send(200, lc.say_pattern(D.rows, D.today, D.timed, q.get("weekday"), q.get("hour")), "text/plain; charset=utf-8")
                 if path == "/api/ledger/say/recurring":
                     return self._send(200, lc.say_recurring(D.series, D.rows, D.today, D.habits), "text/plain; charset=utf-8")
+                if path == "/api/ledger/say/plan":            # Marcus: spending_plan - the cut-spending plan, read out
+                    return self._send(200, lc.say_plan(D.cut, D.rows, D.today), "text/plain; charset=utf-8")
+                if path == "/api/ledger/say/buildable":       # Marcus: spending_buildable - the build-instead-of-buy list
+                    return self._send(200, lc.say_buildable(lc.buildable(D.rows, D.today, D.series), D.rows, D.today), "text/plain; charset=utf-8")
                 if path == "/api/ledger/nudges":
                     return self._send(200, nudge_view(conn, D))
                 if path == "/api/ledger/moments":          # vr-2 asks this, to build the hour-around-the-buy context beside the raw stores

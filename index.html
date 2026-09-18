@@ -58,6 +58,9 @@ h2 { font-size:15px; font-weight:600; margin:0 0 2px; }
 svg { display:block; width:100%; height:auto; overflow:visible; }
 svg text { fill:var(--ui-secondary); font-size:11px; font-family:inherit; }
 svg text.strong { fill:var(--ui-text); font-weight:600; }
+.basemap { pointer-events:none; opacity:.92; filter:saturate(.55); }
+:root[data-ui-mode="dark"] .basemap { opacity:.8; filter:invert(1) hue-rotate(180deg) brightness(.75) contrast(.85) saturate(.4); }
+.basemap ~ text { paint-order:stroke; stroke:var(--ui-inset); stroke-width:3px; stroke-linejoin:round; }   /* a halo, so labels read over streets */
 .legend { display:flex; flex-wrap:wrap; gap:4px 16px; font-size:13px; color:var(--ui-secondary); margin:0 0 8px; }
 .legend span { display:inline-flex; align-items:center; gap:6px; }
 .key { width:14px; height:2px; border-radius:1px; display:inline-block; }
@@ -456,6 +459,7 @@ The page runs the real LEDGER server inside your browser; anything you change li
   <section class="card" id="whereCard">
     <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
       <h2 style="flex:1">Where you spend</h2>
+      <button class="btn quiet" id="mapToggle" aria-pressed="true" title="Street tiles come from OpenStreetMap - the one thing on this page fetched from outside">Map: on</button>
       <button class="btn quiet" id="whereToggle" aria-pressed="false">Show as table</button>
     </div>
     <p class="sub" id="whereSub"></p>
@@ -544,6 +548,7 @@ const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem("l
 // framed in Deck, shared-ui's runtime takes the shell's night messages itself
 window.deckNight = (on) => { const r = document.documentElement; r.dataset.uiExplicit = "1"; r.dataset.uiMode = on ? "dark" : "light"; };
 
+const BASEMAP = false;      // street tiles under "Where you spend" (OpenStreetMap - the page's only outside fetch); the public demo builds this false
 const QS = new URLSearchParams(location.search);
 if (QS.get("night") !== null) window.deckNight(QS.get("night") === "1");     // ?night=1|0 pins the colourway (wrappers, screenshots)
 
@@ -861,7 +866,7 @@ function md(text) {
 }
 
 /* ---- ask: a model for the language, LEDGER's calculators for the figures */
-const EXAMPLES = ["What if I stopped going out for coffee?", "What am I most likely to buy at 3 pm on a Tuesday?", "What subscriptions am I paying for?", "How does this month compare to last?"];
+const EXAMPLES = ["What if I stopped going out for coffee?", "What am I most likely to buy at 3 pm on a Tuesday?", "What subscriptions am I paying for?", "How does this month compare to last?", "What does my cut-spending plan save?", "What could I build instead of buy?"];
 function renderAsk() { put($("#askEg"), ...EXAMPLES.map((q) => h("button", { class: "btn quiet", type: "button", style: "font-size:13px", text: q, onclick: () => { $("#askQ").value = q; ask(); } }))); }
 let asking = false;
 async function ask() {
@@ -986,11 +991,28 @@ function renderWhere() {
   const ch = cov.channels;
   $("#whereSub").textContent = cov.placed + " of " + (ch.in_person || 0) + " in-person purchases placed, by matching the merchant's name to the map near where you were. " + ((ch.online || 0) + (ch.billed || 0)) + " online and billed purchases are deliberately not pinned anywhere." + (far.length ? " " + far.length + " place" + (far.length === 1 ? "" : "s") + " farther than 30 km are in the table only." : "");
   const W = Math.max(300, Math.round($("#whereCard").clientWidth - 34)), H = Math.round(Math.min(520, W * .62)), pad = 30;
-  const xs = near.map((p) => (p.lon - c0[1]) * kx), ys = near.map((p) => (p.lat - c0[0]) * ky), span = Math.max(2, Math.max(...xs) - Math.min(...xs), (Math.max(...ys) - Math.min(...ys)) * W / H);
-  const sc = (W - 2 * pad) / span, cx = (Math.max(...xs) + Math.min(...xs)) / 2, cy = (Math.max(...ys) + Math.min(...ys)) / 2;
-  const X = (p) => W / 2 + ((p.lon - c0[1]) * kx - cx) * sc, Y = (p) => H / 2 - ((p.lat - c0[0]) * ky - cy) * sc, big = Math.max(...near.map((p) => p.spent)), R = (p) => Math.max(4, Math.sqrt(p.spent / big) * 30);
+  // Web Mercator in zoom-20 pixel space, scaled to fit: the circles then sit on street tiles exactly. At most a few
+  // dozen km across, so the projection's own distortion is nil; `sc` stays "pixels per km" for the scale bar.
+  const N20 = 268435456, merc = (p) => { const r = p.lat * Math.PI / 180; return [(p.lon + 180) / 360 * N20, (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * N20]; };
+  const pts = near.map(merc), mx = pts.map((q) => q[0]), my = pts.map((q) => q[1]), pxKm20 = N20 / (40075.017 * Math.cos(c0[0] * Math.PI / 180));
+  const span20 = Math.max(2 * pxKm20, Math.max(...mx) - Math.min(...mx), (Math.max(...my) - Math.min(...my)) * W / H);
+  const k = (W - 2 * pad) / span20, cx = (Math.max(...mx) + Math.min(...mx)) / 2, cy = (Math.max(...my) + Math.min(...my)) / 2, sc = k * pxKm20;
+  const X = (p) => W / 2 + (merc(p)[0] - cx) * k, Y = (p) => H / 2 + (merc(p)[1] - cy) * k, big = Math.max(...near.map((p) => p.spent)), R = (p) => Math.max(4, Math.sqrt(p.spent / big) * 30);
   const svg = s("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Places where money was spent" });
   svg.append(s("rect", { x: 0, y: 0, width: W, height: H, rx: 8, fill: "var(--ui-inset)" }));
+  const mapOn = BASEMAP && store.get("basemap", true);
+  $("#mapToggle").hidden = !BASEMAP; $("#mapToggle").setAttribute("aria-pressed", String(mapOn)); $("#mapToggle").textContent = mapOn ? "Map: on" : "Map: off";
+  if (mapOn) {    // OpenStreetMap raster tiles as plain <image>s - no library, no script from outside. Dimmed under the circles; inverted at night.
+    const zt = Math.max(1, Math.min(19, Math.round(20 + Math.log2(k)))), f = Math.pow(2, 20 - zt), tile = 256 * f, size = tile * k, n = Math.pow(2, zt);
+    const clip = s("clipPath", { id: "mapClip" }); clip.append(s("rect", { x: 0, y: 0, width: W, height: H, rx: 8 })); svg.append(clip);
+    const g = s("g", { class: "basemap", "clip-path": "url(#mapClip)" });
+    for (let ty = Math.floor((cy - H / 2 / k) / tile); ty <= Math.floor((cy + H / 2 / k) / tile); ty++) {
+      if (ty < 0 || ty >= n) continue;
+      for (let tx = Math.floor((cx - W / 2 / k) / tile); tx <= Math.floor((cx + W / 2 / k) / tile); tx++)
+        g.append(s("image", { href: "https://tile.openstreetmap.org/" + zt + "/" + (((tx % n) + n) % n) + "/" + ty + ".png", x: W / 2 + (tx * tile - cx) * k, y: H / 2 + (ty * tile - cy) * k, width: size + .5, height: size + .5 }));
+    }
+    svg.append(g, s("text", { x: W - 6, y: H - 6, "text-anchor": "end", style: "font-size:10px" }, "© OpenStreetMap contributors"));
+  }
   const boxes = [];
   near.slice().sort((a, b) => b.spent - a.spent).forEach((p, i) => {
     const g = s("g", { tabindex: 0, "aria-label": p.name + " " + money(p.spent) });
@@ -1010,6 +1032,7 @@ function renderWhere() {
   put($("#whereTable"), h("div", { style: "overflow-x:auto" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Place" }), h("th", { class: "r", text: "Purchases" }), h("th", { class: "r", text: "Spent" }), h("th", { class: "r", text: "From the centre" }))),
     h("tbody", {}, ...P.map((p) => h("tr", {}, h("td", {}, h("div", { text: p.name }), p.merchants.length > 1 ? h("div", { class: "muted", style: "font-size:13px", text: p.merchants.join(", ") }) : null), h("td", { class: "r num", text: String(p.visits) }), h("td", { class: "r num", text: money(p.spent) }), h("td", { class: "r num muted", text: km(p).toFixed(1) + " km" })))))));
 }
+$("#mapToggle").addEventListener("click", () => { store.set("basemap", !store.get("basemap", true)); renderWhere(); });
 $("#whereToggle").addEventListener("click", (e) => { const on = e.target.getAttribute("aria-pressed") !== "true"; e.target.setAttribute("aria-pressed", on); e.target.textContent = on ? "Show as map" : "Show as table"; $("#whereMap").hidden = on; $("#whereTable").hidden = !on; });
 
 /* ---- habits: places he chooses again and again. The weekday strip is one series, one hue: magnitude only. */
