@@ -51,6 +51,7 @@ ONLINE = ("AMAZON", "APPLE SERVICES", "APPLE COM", "PATREON", "GOOGLE", "OPENAI"
 # two web orders billed from another state were pinned beside the shop he visits most.
 PHONE_FOR_TOWN = re.compile(r"(?:\b\d{3}-\d{3}-\d{3,4}|\b\d{3}-\d{7}|\b\d{10}|\b8(?:00|33|44|55|66|77|88)[A-Z]{7})\s+\d{5}(?:-\d{4})?\s*[A-Z]{2}\s+USA?\s*$")
 ONLINE_MARK = re.compile(r"\.(?:COM|NET|US|ORG|IO|AI)\b|\bWWW\b|\bWEB ?ORDER\b|^[A-Z]+COM\d|" + PHONE_FOR_TOWN.pattern)
+ZIP_TAIL = re.compile(r"((?:[A-Z][A-Z.'-]*\s+){0,2}[A-Z][A-Z.'-]*)\s*(\d{5})(?:-\d{4})?\s*[A-Z]{2}\s+(?:USA?|US)\s*$")     # "... TOWN 12345 XX USA"
 STAYS = ("Travel",)         # a hotel prints its reservations line where the town goes, and he slept there all the same
 # pay on the way out; everything else (counters, pumps), on the way in
 CHECKOUT_LAST = ("Groceries", "Shopping", "Pharmacy", "Home & hardware", "Electronics", "Clothing", "Hobby & craft",
@@ -990,14 +991,38 @@ def build(verbose=True):
     # The index is one state's map. A line from another state can only resolve to a namesake: a firm in a Springfield
     # two thousand miles away was pinned to the Springfield in his own state. Those stay unplaced.
     home_state = max(sorted(states), key=states.get) if states else None
+    # A hotel prints its reservations phone where the town goes ("HOTEL ... 800-555-0100 12345 XX USA"). The same
+    # ZIP on his OTHER lines names the town (12345 -> SPRINGFIELD): his own statements are the ZIP table.
+    # Most common tail first, and only a tail that names a real town counts ("... FLOOR INTERNET 12345" does not); a ZIP
+    # none of his lines names falls back to its first three digits - one postal area (123xx = one sectional centre).
+    tails5, tails3, zip_city = {}, {}, {}
+    for r in rows:
+        line = (r.get("description") or "").upper().strip()
+        zm = ZIP_TAIL.search(line)
+        if zm and not PHONE_FOR_TOWN.search(line):
+            for d, key in ((tails5, zm.group(2)), (tails3, zm.group(2)[:3])):
+                t = d.setdefault(key, {})
+                t[zm.group(0)] = t.get(zm.group(0), 0) + 1
+
+    def town_of_zip(z):
+        if z not in zip_city:
+            zip_city[z] = None
+            for d, key in ((tails5, z), (tails3, z[:3])):
+                for tail in sorted(d.get(key, {}), key=lambda t: (-d[key][t], t)):
+                    zip_city[z] = city_of(tail, home)
+                    if zip_city[z]:
+                        return zip_city[z]
+        return zip_city[z]
     for uid, m in out.items():
         r, hint = m["_row"], m["_hint"]
         if m["channel"] != "in_person" or "merchant_lat" in m or not hint:
             continue
         k = (r["_m"], hint["zip"])
         if geocode and home and (k not in known or known[k].get("source") in ("name", "unresolved", "city-area")):
-            away = hint["state"] != home_state or bool(PHONE_FOR_TOWN.search((r.get("description") or "").upper().strip()))      # no town on the line: nowhere to look, and near HOME is a guess
-            city = None if away else city_of(r.get("description"), home)
+            phone = bool(PHONE_FOR_TOWN.search((r.get("description") or "").upper().strip()))
+            city = None if hint["state"] != home_state else (
+                town_of_zip(hint["zip"]) if phone else city_of(r.get("description"), home))
+            away = hint["state"] != home_state or (phone and not city)      # no town on the line and none from its ZIP: nowhere to look, and near HOME is a guess
             merchant = r.get("merchant") or r["_m"]
             g = None
             if city:

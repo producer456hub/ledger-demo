@@ -45,6 +45,7 @@ OWNER = os.environ.get("LEDGER_OWNER", "owner@example.com").strip().lower()
 SHELL_ORIGIN = os.environ.get("LEDGER_SHELL_ORIGIN", "https://ledger.example:8940")
 MARCUS = os.environ.get("LEDGER_MARCUS", "https://marcus.example").rstrip("/")
 VERSION = "0.2.0"
+BRANCH_KM = 25              # a check-in's location re-pins a same-name store this close to the tap, never one in another town
 
 _lock = threading.Lock()
 _cache = {"version": 0, "built": -1, "rows": []}
@@ -627,10 +628,16 @@ def post(conn, path, p, who):
             mkey = best[1]
         tap = conn.execute("SELECT lat, lon FROM taps WHERE id = ?", (p.get("tap_id"),)).fetchone()
         if mkey and tap and tap["lat"] is not None:
-            # he told us WHAT, the phone told us WHERE: that pins the merchant exactly, and the next guess there is not a guess
+            # he told us WHAT, the phone told us WHERE: that pins the merchant exactly, and the next guess there is not a guess -
+            # for THIS branch only. merchant_geo is one row per (merchant, ZIP); a row of the same name further than
+            # BRANCH_KM from the tap is another store (09-18: naming a chain at a store near home moved an older purchase at
+            # the same chain in another city onto the home pin). A row with no position yet cannot be told apart: left alone.
             with conn:
-                conn.execute("UPDATE merchant_geo SET lat = ?, lon = ?, source = 'tap-confirmed', resolved = 'confirmed by the owner at the till', at = ? "
-                             "WHERE mkey = ? AND source IN ('city-area', 'unresolved', 'name')", (tap["lat"], tap["lon"], now_iso(), mkey))
+                for g in conn.execute("SELECT zip, lat, lon FROM merchant_geo WHERE mkey = ? AND source IN ('city-area', 'unresolved', 'name')", (mkey,)).fetchall():
+                    if g["lat"] is None or motive.km((g["lat"], g["lon"]), (tap["lat"], tap["lon"])) > BRANCH_KM:
+                        continue
+                    conn.execute("UPDATE merchant_geo SET lat = ?, lon = ?, source = 'tap-confirmed', resolved = 'confirmed by the owner at the till', at = ? "
+                                 "WHERE mkey = ? AND zip = ?", (tap["lat"], tap["lon"], now_iso(), mkey, g["zip"]))
         with conn:
             conn.execute("UPDATE checkins SET reply = ?, reply_at = ?, verdict = ?, reply_intent = ?, reply_mkey = ?, state = 'answered' WHERE tap_id = ?",
                          (str(p.get("reply"))[:200], p.get("reply_at") or now_iso(), verdict, intent, mkey, p.get("tap_id")))
