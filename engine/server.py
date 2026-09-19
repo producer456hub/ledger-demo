@@ -507,6 +507,23 @@ def demojibake(s):
         return s
 
 
+_towns = {"key": None, "words": set()}
+
+
+def _town_words(rows):
+    """The words his own statements use for towns ("... TOWN 12345 XX USA"), each checked against the map index so a
+    street word ("ROAD") never counts. Cached per statement; empty when the index is not there (tests pass their own)."""
+    key = (len(rows), rows[-1].get("uid") if rows else None)
+    if _towns["key"] != key:
+        look, words = motive._city_lookup(), set()
+        for tail in set(m.group(0) for m in (motive.ZIP_TAIL.search((r.get("description") or "").upper().strip()) for r in rows) if m):
+            c = look(tail, None)
+            if c:
+                words.update(re.findall(r"[a-z0-9']{3,}", c[3].lower()))
+        _towns.update(key=key, words=words)
+    return _towns["words"]
+
+
 def post(conn, path, p, who):
     if path == "/api/ledger/buildable":         # the list is LEDGER's; the judgement is Marcus's, who knows the fleet
         D = data(conn)
@@ -618,13 +635,17 @@ def post(conn, path, p, who):
             verdict = "confirmed" if i == 0 else "corrected"
         elif verdict == "confirmed":
             mkey = ck["mkey"]
-        else:       # "phin cafe in the home town": whichever merchant he has bought from shares the most words with what he said
+        else:       # "phin cafe in the home town": whichever merchant he has bought from shares the most words with what he said -
+            # and at least one word that is not a town: "the deli in Springfield" shares only the town with Springfield Coffee, so it
+            # names a store he has not bought from yet (None, paired by time later), never the coffee shop down the street
             said = set(w for w in re.findall(r"[a-z0-9']{3,}", str(p.get("reply")).lower()) if w not in ("the", "was", "and", "not", "for"))
+            rows_ = data(conn).rows
+            towns = _town_words(rows_)
             best = (0, None)
-            for k in set(r["_m"] for r in data(conn).rows):
-                n = len(said & set(re.findall(r"[a-z0-9']{3,}", k.lower())))
-                if n > best[0]:
-                    best = (n, k)
+            for k in set(r["_m"] for r in rows_):
+                shared = said & set(re.findall(r"[a-z0-9']{3,}", k.lower()))
+                if len(shared) > best[0] and shared - towns:
+                    best = (len(shared), k)
             mkey = best[1]
         tap = conn.execute("SELECT lat, lon FROM taps WHERE id = ?", (p.get("tap_id"),)).fetchone()
         if mkey and tap and tap["lat"] is not None:

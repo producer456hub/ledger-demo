@@ -75,8 +75,9 @@ _PUNCT = re.compile(r"[^A-Z0-9& ]+")
 # or AMAZON.COM* and refunds it as AMAZON MKTPLACE PMTS: five merchants on the page, and returns that matched no purchase.
 # Prime is a subscription with a series of its own and stays itself.
 _FAMILIES = ((re.compile(r"^(?:AMAZON|AMZN)(?!\s+PRIME)(?:\s+(?:MKTP\w*|MARK\w*|RETA\w*|COM|US)\b.*)?$"), "AMAZON"),
-             (re.compile(r"^B&H PHOTO\b.*$"), "B&H PHOTO"))      # bought as "B&H Photo Video", refunded as "B&H Photo 800-...": the return took an older purchase's shorter key and paired with nothing
-FAMILY_NAME = {"AMAZON": "Amazon", "B&H PHOTO": "B&H Photo"}          # what to call the family: its rows each carry one of the billing names
+             (re.compile(r"^B&H PHOTO\b.*$"), "B&H PHOTO"),
+             (re.compile(r"^TOWN COFFEE(?:\s+R\w*)?$"), "TOWN COFFEE ROASTING"))   # Apple cuts the name at a different letter each time      # bought as "B&H Photo Video", refunded as "B&H Photo 800-...": the return took an older purchase's shorter key and paired with nothing
+FAMILY_NAME = {"AMAZON": "Amazon", "B&H PHOTO": "B&H Photo", "TOWN COFFEE ROASTING": "Town Coffee Roasting"}          # what to call the family: its rows each carry one of the billing names
 
 
 def merchant_key(name, aliases=None):

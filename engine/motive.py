@@ -220,11 +220,13 @@ NOT_A_SHOP = ("public_transport:", "highway:", "railway:", "place:", "natural:",
               "amenity:bench", "amenity:parking", "leisure:park", "leisure:dog_park", "leisure:playground")
 
 
-def solid(merchant, resolved):
+def solid(merchant, resolved, town=None):
     """Did the index really find THIS merchant? Every telling word of the found name must be in the
     merchant's own (a found word may run on past the merchant's last one: Apple truncates, "Brewing Com"),
     or the found name must start with the whole merchant ("Baskin" -> Baskin-Robbins). Matching the
-    leading word alone put an auto repair shop at "Metro City Restaurant" and a dentist at a dry cleaner sharing its first word."""
+    leading word alone put an auto repair shop at "Metro City Restaurant" and a dentist at a dry cleaner sharing its first word.
+    `town` (the statement's): a found name whose telling words are ONLY that town names another business there - a cafe
+    named after its town, missing from the index, took a boutique named after the same town (09-18)."""
     words = lambda x: re.sub(r"[^a-z0-9]+", " ", (x or "").lower().replace("'", "").replace("’", "")).split()
     m = words(re.sub(r"[*#].*$", "", merchant or ""))
     r = words((resolved or "").split(",")[0])              # "Chevron, Springfield": the town is the index's, not the name
@@ -234,6 +236,8 @@ def solid(merchant, resolved):
     if len(mc) >= 6 and rc.startswith(mc):
         return True
     telling = [w for w in r if len(w) >= 3 and w not in GENERIC]
+    if town and telling and set(telling) <= set(words(town)):
+        return False
     return (bool(telling) and m[0] in rc
             and all(w in mc or (len(m[-1]) >= 3 and w.startswith(m[-1])) for w in telling))
 
@@ -808,7 +812,7 @@ def _branch_lookup():
         for v in name_variants(merchant):
             for name, town, kind, la, lo in rows(norm(v), city) if norm(v) else []:
                 label = name if not town or " ".join(norm(town)) in " ".join(norm(name)) else "%s, %s" % (name, town)
-                if (round(la, 4), round(lo, 4)) in seen or (kind or "").startswith(NOT_A_SHOP) or not solid(merchant, label):
+                if (round(la, 4), round(lo, 4)) in seen or (kind or "").startswith(NOT_A_SHOP) or not solid(merchant, label, city[3]):
                     continue
                 if km((la, lo), (city[0], city[1])) <= city[2]:
                     seen.add((round(la, 4), round(lo, 4)))
@@ -1035,7 +1039,7 @@ def build(verbose=True):
                 for v in name_variants(merchant):
                     c = geocode(v, bias)
                     # near is not enough: a namesake next door is still the wrong place (the town pin is honest)
-                    if c and (not solid(merchant, c["name"]) or (kind_of(c["lat"], c["lon"]) or "").startswith(NOT_A_SHOP)):
+                    if c and (not solid(merchant, c["name"], city[3] if city else None) or (kind_of(c["lat"], c["lon"]) or "").startswith(NOT_A_SHOP)):
                         continue
                     if c and (km((c["lat"], c["lon"]), (city[0], city[1])) <= city[2] if city else km((c["lat"], c["lon"]), home) <= LOCAL_KM):
                         g = c
